@@ -41,6 +41,7 @@
 #include "ublkdrv-genl.h"
 #include "ublkdrv-req.h"
 #include "ublkdrv-uio.h"
+#include "ublkdrv.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pronin Denis <dannftk@yandex.ru>");
@@ -95,7 +96,7 @@ static void ublkdrv_submit_bio(struct bio* bio)
 
     struct block_device* bdev   = bio->bi_bdev;
     struct gendisk* gd          = bdev->bd_disk;
-    struct ublkdrv_dev* ubd        = gd->private_data;
+    struct ublkdrv_dev* ubd     = gd->private_data;
     unsigned long const start_j = bio_start_io_acct(bio);
 
     req = kzalloc_node(sizeof(*req), GFP_KERNEL, ubd->nid);
@@ -286,7 +287,7 @@ err:
     return r;
 }
 
-void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
+static void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
 {
     int i;
 

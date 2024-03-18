@@ -18,6 +18,7 @@
 #include "uapi/ublkdrv/cmdb.h"
 
 #include "ublkdrv-cfq.h"
+#include "ublkdrv-priv.h"
 #include "ublkdrv-req.h"
 #include "ublkdrv-sema-cells.h"
 #include "ublkdrv-uio.h"
@@ -63,10 +64,10 @@ static void ublkdrv_req_cfq_push_work_h(struct work_struct* work)
     int r;
     bool reqs_preloaded;
 
-    struct ublkdrv_req* req   = container_of(work, struct ublkdrv_req, work);
-    struct ublkdrv_dev* ubd   = req->ubd;
-    struct ublkdrv_ctx* kctx  = ubd->kctx;
-    struct uio_info* uinfo = &ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER]->uio;
+    struct ublkdrv_req* req  = container_of(work, struct ublkdrv_req, work);
+    struct ublkdrv_dev* ubd  = req->ubd;
+    struct ublkdrv_ctx* kctx = ubd->kctx;
+    struct uio_info* uinfo   = &ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER]->uio;
 
 retry_alloc_id:
     req_id = 0;
@@ -154,7 +155,7 @@ void ublkdrv_req_copy_work_h(struct work_struct* work)
     struct workqueue_struct* nwq;
 
     struct ublkdrv_req* req           = container_of(work, struct ublkdrv_req, work);
-    struct bio* bio                = req->bio;
+    struct bio* bio                   = req->bio;
     struct ublkdrv_dev* ubd           = req->ubd;
     struct ublkdrv_ctx* kctx          = ubd->kctx;
     struct ublkdrv_cellc const* cellc = kctx->cellc;
@@ -195,7 +196,7 @@ static int ublkdrv_req_submit_with_data(struct ublkdrv_req* req) //
     unsigned int bio_sz;
     struct ublkdrv_ctx* uctx;
 
-    struct bio const* bio          = req->bio;
+    struct bio const* bio             = req->bio;
     struct ublkdrv_dev* ubd           = req->ubd;
     struct ublkdrv_ctx const* kctx    = ubd->kctx;
     struct ublkdrv_cellc const* cellc = kctx->cellc;
@@ -285,7 +286,7 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
 
     struct ublkdrv_req* req = container_of(work, struct ublkdrv_req, work);
     struct ublkdrv_dev* ubd = req->ubd;
-    int const op         = ublkdrv_bio_to_cmd_op(req->bio);
+    int const op            = ublkdrv_bio_to_cmd_op(req->bio);
     if (op < 0)
         return ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
 
