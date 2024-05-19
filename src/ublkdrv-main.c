@@ -404,7 +404,7 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
 
     r = 0;
 
-    gd = blk_alloc_disk(ubd->nid);
+    gd = blk_alloc_disk(NULL, ubd->nid);
     if (!gd) {
         pr_err("unable to allocate gendisk, out of memory\n");
         goto free_id;
