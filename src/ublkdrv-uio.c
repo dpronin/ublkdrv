@@ -172,7 +172,7 @@ static void ublkdrv_uio_vma_open(struct vm_area_struct* vma)
 {
     struct ublkdrv_uio* uio = vma->vm_private_data;
     struct ublkdrv_dev* ubd = uio->priv;
-    u32 const mem_id     = vma->vm_pgoff;
+    u32 const mem_id        = vma->vm_pgoff;
     pr_debug("%s: vma_open(), mi %u", ubd->name, mem_id);
     ubd->ops->acquire(ubd);
 }
@@ -181,7 +181,7 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
 {
     struct ublkdrv_uio* uio = vma->vm_private_data;
     struct ublkdrv_dev* ubd = uio->priv;
-    u32 const mem_id     = vma->vm_pgoff;
+    u32 const mem_id        = vma->vm_pgoff;
     pr_debug("%s: vma_close(), mi %u", ubd->name, mem_id);
     /* clang-format off */
     if (test_and_clear_bit(mem_id, &uio->flags)
@@ -234,7 +234,7 @@ static vm_fault_t ublkdrv_uio_vma_fault(struct vm_fault* vmf)
     struct page* page;
 
     struct vm_area_struct* vma = vmf->vma;
-    struct ublkdrv_uio* uio       = vma->vm_private_data;
+    struct ublkdrv_uio* uio    = vma->vm_private_data;
     u32 const mem_id           = vma->vm_pgoff;
 
     if (unlikely(!(mem_id < uio->mems_len)))
@@ -446,7 +446,7 @@ int ublkdrv_uios_register(struct ublkdrv_dev* ubd)
 err:
     for (j = i - 1; !(j < 0); --j) {
         struct ublkdrv_uio* uio = ubd->uios[j];
-        ubd->uios[j]         = NULL;
+        ubd->uios[j]            = NULL;
         ublkdrv_uio_unregister(uio);
         kfree_const(uio->name);
         kfree(uio);

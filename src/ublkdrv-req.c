@@ -17,7 +17,7 @@ void ublkdrv_req_from_bio_to_cells_copy(struct ublkdrv_cellc const* cellc, void*
     u32 data_sz;
     void const* bv_page;
 
-    u32 cell_offset                = 0;
+    u32 cell_offset                   = 0;
     struct ublkdrv_celld const* celld = &cellc->cellds[celldn];
 
     if (unlikely(!(celldn < cellc->cellds_len)))
