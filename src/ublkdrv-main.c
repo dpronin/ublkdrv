@@ -26,6 +26,7 @@
 #include <linux/types.h>
 #include <linux/uio_driver.h>
 #include <linux/vmalloc.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 
 #include "uapi/ublkdrv/cellc.h"
@@ -246,6 +247,8 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     params->max_req_sz = ctx->cells_sz;
 
     ctx->params = params;
+
+    init_waitqueue_head(&ctx->wq);
 
     return 0;
 

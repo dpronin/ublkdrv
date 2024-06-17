@@ -19,6 +19,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/vmalloc.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 
 #include "uapi/ublkdrv/cellc.h"
@@ -108,6 +109,8 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
         idr_unlock(uctx->reqs);
 
         rcu_read_unlock();
+
+        wake_up_interruptible(&kctx->wq);
 
         if (likely(req)) {
             void (*nwh)(struct work_struct*);

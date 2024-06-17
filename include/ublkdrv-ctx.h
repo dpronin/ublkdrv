@@ -4,6 +4,7 @@
 #include <linux/idr.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/wait.h>
 
 #include "uapi/ublkdrv/cellc.h"
 #include "uapi/ublkdrv/cmdb.h"
@@ -46,6 +47,8 @@ struct ublkdrv_ctx {
 
     struct idr* reqs;
     struct ublkdrv_sema_bitset* cells_sema;
+
+    struct wait_queue_head wq;
 };
 
 #endif /* UBLKDRV_CTX_H */

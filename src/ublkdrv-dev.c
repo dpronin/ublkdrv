@@ -12,6 +12,7 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/uio_driver.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 
 #include "uapi/ublkdrv/cmd.h"
@@ -55,6 +56,7 @@ static inline void __ublkdrv_req_cells_free(struct ublkdrv_req const* req, struc
         default:
             break;
     }
+    wake_up_interruptible(&kctx->wq);
 }
 
 static void ublkdrv_req_cfq_push_work_h(struct work_struct* work)
@@ -88,10 +90,13 @@ retry_alloc_id:
 
     r = idr_alloc_u32(uctx->reqs, req, &req_id, uctx->cmdb->cmds_len - 1, GFP_NOWAIT);
     if (unlikely(r)) {
+        DEFINE_WAIT(wq_entry);
         idr_unlock(uctx->reqs);
         rcu_read_unlock();
         idr_preload_end();
+        prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
         schedule();
+        finish_wait(&kctx->wq, &wq_entry);
         goto retry_alloc_id;
     }
 
@@ -198,7 +203,7 @@ static int ublkdrv_req_submit_with_data(struct ublkdrv_req* req) //
 
     struct bio const* bio             = req->bio;
     struct ublkdrv_dev* ubd           = req->ubd;
-    struct ublkdrv_ctx const* kctx    = ubd->kctx;
+    struct ublkdrv_ctx* kctx          = ubd->kctx;
     struct ublkdrv_cellc const* cellc = kctx->cellc;
     struct ublkdrv_celld dummy_celld  = {
          .offset  = 0u,
@@ -232,10 +237,13 @@ retry:
         int celldn           = sema_bitset_trywait(uctx->cells_sema->semas[sema_index]);
 
         if (unlikely(celldn < 0 || !(celldn < UBLKDRV_CTX_CELLS_PER_BITSET))) {
+            DEFINE_WAIT(wq_entry);
             ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
             spin_unlock(&uctx->cells_sema->lock);
             rcu_read_unlock();
+            prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
             schedule();
+            finish_wait(&kctx->wq, &wq_entry);
             rcu_read_lock();
             goto retry;
         }
