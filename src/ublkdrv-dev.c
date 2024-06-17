@@ -295,8 +295,10 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
     struct ublkdrv_req* req = container_of(work, struct ublkdrv_req, work);
     struct ublkdrv_dev* ubd = req->ubd;
     int const op            = ublkdrv_bio_to_cmd_op(req->bio);
-    if (op < 0)
-        return ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
+    if (op < 0) {
+        ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
+        return;
+    }
 
     ublkdrv_cmd_set_op(&req->cmd, op);
 
@@ -311,7 +313,8 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
             int const rc = ublkdrv_req_submit_with_data(req);
             if (unlikely(rc)) {
                 rcu_read_unlock();
-                return ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
+                ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
+                return;
             }
         } break;
         case UBLKDRV_CMD_OP_FLUSH:
@@ -323,7 +326,9 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
             ublkdrv_cmd_write_zeros_set_sz(&req->cmd.u.wz, bio_sectors(req->bio) << SECTOR_SHIFT);
             break;
         default:
-            return ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
+            rcu_read_unlock();
+            ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
+            return;
     }
 
     nwh = nwh ?: ublkdrv_req_cfq_push_work_h;
