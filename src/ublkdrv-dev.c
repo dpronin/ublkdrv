@@ -201,37 +201,89 @@ static inline u32 ublkdrv_get_sema_index(struct ublkdrv_sema_bitset* cells_sema,
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(cells_sema->semas) - 1);
 }
 
+static int ublkdrv_dev_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, unsigned int bio_sz, u32* fcdn)
+{
+    int sema_index;
+
+    struct ublkdrv_cellc const* cellc = uctx->cellc;
+    struct ublkdrv_celld dummy_celld  = {
+         .offset  = 0u,
+         .data_sz = 0u,
+         .ncelld  = cellc->cellds_len,
+    };
+    int cells_nr                           = 0;
+    unsigned int bio_len_pgs               = DIV_ROUND_UP(bio_sz, PAGE_SIZE);
+    struct ublkdrv_sema_bitset* cells_sema = uctx->cells_sema;
+
+    spin_lock(&cells_sema->lock);
+
+    sema_index = ARRAY_SIZE(cells_sema->semas) - 1;
+
+    for (struct ublkdrv_celld *prev_celld = &dummy_celld, *celld = NULL;
+         cells_nr <= U16_MAX && bio_len_pgs && bio_sz;
+         ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, bio_sz -= celld->data_sz, prev_celld = celld) {
+
+        u32 celldn;
+
+        u32 const sema_index_min = ublkdrv_get_sema_index(cells_sema, bio_len_pgs);
+
+        sema_index = min_t(int, sema_index, sema_index_min);
+
+        for (; !(sema_index < 0); --sema_index) {
+            celldn = sema_bitset_trywait(cells_sema->semas[sema_index]);
+            if (likely(!(celldn < 0) && celldn < UBLKDRV_CTX_CELLS_PER_BITSET))
+                break;
+        }
+
+        if (unlikely(sema_index < 0)) {
+            ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
+            spin_unlock(&cells_sema->lock);
+            return -EBUSY;
+        }
+
+        celldn += sema_index * UBLKDRV_CTX_CELLS_PER_BITSET;
+
+        celld = &uctx->cellc->cellds[celldn];
+
+        celld->data_sz = min_t(u32, bio_sz, UBLKDRV_CELL_SZ_MIN << sema_index);
+
+        prev_celld->ncelld = celldn;
+        bio_len_pgs -= 1u << sema_index;
+    }
+
+    if (unlikely(!(cells_nr <= U16_MAX))) {
+        ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
+        spin_unlock(&cells_sema->lock);
+        return -ENOTSUPP;
+    }
+
+    spin_unlock(&cells_sema->lock);
+
+    BUG_ON(bio_len_pgs || bio_sz);
+    BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
+
+    *fcdn = dummy_celld.ncelld;
+
+    return cells_nr;
+}
+
 static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req)
 {
-    unsigned int bio_sz, bio_sz_left;
     struct ublkdrv_ctx* uctx;
-    struct ublkdrv_celld dummy_celld;
-    u32 cells_nr;
-    unsigned int bio_len_pgs, bio_len_pgs_left;
+    u32 fcdn;
+    int cells_nr;
 
-    struct bio const* bio             = req->bio;
-    struct ublkdrv_dev* ubd           = req->ubd;
-    struct ublkdrv_ctx* kctx          = ubd->kctx;
-    struct ublkdrv_cellc const* cellc = kctx->cellc;
+    struct bio const* bio    = req->bio;
+    struct ublkdrv_dev* ubd  = req->ubd;
+    struct ublkdrv_ctx* kctx = ubd->kctx;
+    unsigned int bio_sz      = bio_sectors(bio) << SECTOR_SHIFT;
 
-    bio_sz = bio_sectors(bio) << SECTOR_SHIFT;
     if (unlikely(!bio_sz))
         return 1;
 
     BUG_ON(!(bio_sz <= kctx->params->max_req_sz));
 
-    bio_len_pgs = DIV_ROUND_UP(bio_sz, PAGE_SIZE);
-
 retry:
-    dummy_celld = (struct ublkdrv_celld){
-        .offset  = 0u,
-        .data_sz = 0u,
-        .ncelld  = cellc->cellds_len,
-    };
-    cells_nr         = 0;
-    bio_sz_left      = bio_sz;
-    bio_len_pgs_left = bio_len_pgs;
-
     rcu_read_lock();
 
     uctx = rcu_dereference(ubd->uctx);
@@ -240,66 +292,30 @@ retry:
         return -ENOLINK;
     }
 
-    spin_lock(&uctx->cells_sema->lock);
-
-    for (struct ublkdrv_celld *prev_celld = &dummy_celld, *celld = NULL;
-         cells_nr <= U16_MAX && bio_len_pgs_left && bio_sz_left;
-         ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, bio_sz_left -= celld->data_sz, prev_celld = celld) {
-
-        u32 celldn;
-        int sema_index;
-
-        for (sema_index = ublkdrv_get_sema_index(uctx->cells_sema, bio_len_pgs_left); !(sema_index < 0); --sema_index) {
-            celldn = sema_bitset_trywait(uctx->cells_sema->semas[sema_index]);
-            if (likely(!(celldn < 0) && celldn < UBLKDRV_CTX_CELLS_PER_BITSET))
-                break;
-        }
-
-        if (unlikely(sema_index < 0)) {
-            DEFINE_WAIT(wq_entry);
-            ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
-            spin_unlock(&uctx->cells_sema->lock);
-            rcu_read_unlock();
-            prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
-            schedule_timeout(msecs_to_jiffies(100));
-            finish_wait(&kctx->wq, &wq_entry);
-            goto retry;
-        }
-
-        celldn += sema_index * UBLKDRV_CTX_CELLS_PER_BITSET;
-
-        celld = &uctx->cellc->cellds[celldn];
-
-        celld->data_sz = min_t(u32, bio_sz_left, UBLKDRV_CELL_SZ_MIN << sema_index);
-
-        prev_celld->ncelld = celldn;
-        bio_len_pgs_left -= 1u << sema_index;
-    }
-
-    if (unlikely(cells_nr > U16_MAX)) {
-        ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
-        spin_unlock(&uctx->cells_sema->lock);
-        rcu_read_unlock();
-        return -ENOTSUPP;
-    }
-
-    spin_unlock(&uctx->cells_sema->lock);
-
-    BUG_ON(bio_len_pgs_left || bio_sz_left);
-    BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
+    cells_nr = ublkdrv_dev_cells_acquire(ubd, uctx, bio_sz, &fcdn);
 
     rcu_read_unlock();
+
+    if (unlikely(cells_nr < 0)) {
+        DEFINE_WAIT(wq_entry);
+        prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
+        schedule_timeout(msecs_to_jiffies(100));
+        finish_wait(&kctx->wq, &wq_entry);
+        goto retry;
+    }
+
+    BUG_ON(!(cells_nr <= U16_MAX));
 
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_READ:
             ublkdrv_cmd_read_set_offset(&req->cmd.u.r, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            ublkdrv_cmd_read_set_fcdn(&req->cmd.u.r, dummy_celld.ncelld);
-            ublkdrv_cmd_read_set_cds_nr(&req->cmd.u.r, cells_nr);
+            ublkdrv_cmd_read_set_fcdn(&req->cmd.u.r, fcdn);
+            ublkdrv_cmd_read_set_cds_nr(&req->cmd.u.r, (u16)cells_nr);
             break;
         case UBLKDRV_CMD_OP_WRITE:
             ublkdrv_cmd_write_set_offset(&req->cmd.u.w, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            ublkdrv_cmd_write_set_fcdn(&req->cmd.u.w, dummy_celld.ncelld);
-            ublkdrv_cmd_write_set_cds_nr(&req->cmd.u.w, cells_nr);
+            ublkdrv_cmd_write_set_fcdn(&req->cmd.u.w, fcdn);
+            ublkdrv_cmd_write_set_cds_nr(&req->cmd.u.w, (u16)cells_nr);
             break;
         default:
             BUG();
