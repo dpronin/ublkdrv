@@ -195,19 +195,18 @@ static inline u32 ublkdrv_get_sema_index(struct ublkdrv_sema_bitset* cells_sema,
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(cells_sema->semas) - 1);
 }
 
-static int ublkdrv_req_submit_with_data(struct ublkdrv_req* req) //
-    __must_hold(RCU)
+static int ublkdrv_req_submit_with_data(struct ublkdrv_req* req)
 {
     unsigned int bio_sz, bio_sz_left;
     struct ublkdrv_ctx* uctx;
+    struct ublkdrv_celld dummy_celld;
+    u32 cells_nr;
+    unsigned int bio_len_pgs, bio_len_pgs_left;
 
     struct bio const* bio             = req->bio;
     struct ublkdrv_dev* ubd           = req->ubd;
     struct ublkdrv_ctx* kctx          = ubd->kctx;
     struct ublkdrv_cellc const* cellc = kctx->cellc;
-    struct ublkdrv_celld dummy_celld;
-    u32 cells_nr;
-    unsigned int bio_len_pgs, bio_len_pgs_left;
 
     bio_sz = bio_sectors(bio) << SECTOR_SHIFT;
     if (unlikely(!bio_sz))
@@ -228,9 +227,13 @@ retry:
     bio_sz_left      = bio_sz;
     bio_len_pgs_left = bio_len_pgs;
 
+    rcu_read_lock();
+
     uctx = rcu_dereference(ubd->uctx);
-    if (unlikely(!uctx))
+    if (unlikely(!uctx)) {
+        rcu_read_unlock();
         return -ENOLINK;
+    }
 
     spin_lock(&uctx->cells_sema->lock);
 
@@ -249,7 +252,6 @@ retry:
             prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
             schedule();
             finish_wait(&kctx->wq, &wq_entry);
-            rcu_read_lock();
             goto retry;
         }
 
@@ -266,6 +268,7 @@ retry:
     if (unlikely(cells_nr > U16_MAX)) {
         ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
         spin_unlock(&uctx->cells_sema->lock);
+        rcu_read_unlock();
         return -ENOTSUPP;
     }
 
@@ -273,6 +276,8 @@ retry:
 
     BUG_ON(bio_len_pgs_left || bio_sz_left);
     BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
+
+    rcu_read_unlock();
 
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_READ:
@@ -307,8 +312,6 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
 
     ublkdrv_cmd_set_op(&req->cmd, op);
 
-    rcu_read_lock();
-
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_WRITE:
             nwh = ublkdrv_req_copy_work_h;
@@ -317,7 +320,6 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
         case UBLKDRV_CMD_OP_READ: {
             int const rc = ublkdrv_req_submit_with_data(req);
             if (unlikely(rc)) {
-                rcu_read_unlock();
                 ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
                 return;
             }
@@ -331,7 +333,6 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
             ublkdrv_cmd_write_zeros_set_sz(&req->cmd.u.wz, bio_sectors(req->bio) << SECTOR_SHIFT);
             break;
         default:
-            rcu_read_unlock();
             ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
             return;
     }
@@ -341,8 +342,6 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
 
     INIT_WORK(&req->work, nwh);
     queue_work(nwq, &req->work);
-
-    rcu_read_unlock();
 }
 
 void ublkdrv_dev_submit(struct ublkdrv_req* req)
