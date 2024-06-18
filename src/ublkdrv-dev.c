@@ -4,9 +4,12 @@
 
 #include <linux/bio.h>
 #include <linux/blk_types.h>
+#include <linux/blkdev.h>
 #include <linux/build_bug.h>
+#include <linux/compiler.h>
 #include <linux/container_of.h>
 #include <linux/idr.h>
+#include <linux/jiffies.h>
 #include <linux/math.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -71,7 +74,7 @@ static void ublkdrv_req_cfq_push_work_h(struct work_struct* work)
     struct ublkdrv_ctx* kctx = ubd->kctx;
     struct uio_info* uinfo   = &ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER]->uio;
 
-retry_alloc_id:
+retry:
     req_id = 0;
 
     idr_preload(GFP_KERNEL);
@@ -83,7 +86,8 @@ retry_alloc_id:
         __ublkdrv_req_cells_free(req, kctx);
         rcu_read_unlock();
         idr_preload_end();
-        return ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
+        ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
+        return;
     }
 
     idr_lock(uctx->reqs);
@@ -95,9 +99,9 @@ retry_alloc_id:
         rcu_read_unlock();
         idr_preload_end();
         prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
-        schedule();
+        schedule_timeout(msecs_to_jiffies(100));
         finish_wait(&kctx->wq, &wq_entry);
-        goto retry_alloc_id;
+        goto retry;
     }
 
     ublkdrv_cmd_set_id(&req->cmd, (u8)req_id);
@@ -195,7 +199,7 @@ static inline u32 ublkdrv_get_sema_index(struct ublkdrv_sema_bitset* cells_sema,
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(cells_sema->semas) - 1);
 }
 
-static int ublkdrv_req_submit_with_data(struct ublkdrv_req* req)
+static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req)
 {
     unsigned int bio_sz, bio_sz_left;
     struct ublkdrv_ctx* uctx;
@@ -241,16 +245,22 @@ retry:
          cells_nr <= U16_MAX && bio_len_pgs_left && bio_sz_left;
          ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, bio_sz_left -= celld->data_sz, prev_celld = celld) {
 
-        u32 const sema_index = ublkdrv_get_sema_index(uctx->cells_sema, bio_len_pgs_left);
-        int celldn           = sema_bitset_trywait(uctx->cells_sema->semas[sema_index]);
+        u32 celldn;
+        int sema_index;
 
-        if (unlikely(celldn < 0 || !(celldn < UBLKDRV_CTX_CELLS_PER_BITSET))) {
+        for (sema_index = ublkdrv_get_sema_index(uctx->cells_sema, bio_len_pgs_left); !(sema_index < 0); --sema_index) {
+            celldn = sema_bitset_trywait(uctx->cells_sema->semas[sema_index]);
+            if (likely(!(celldn < 0) && celldn < UBLKDRV_CTX_CELLS_PER_BITSET))
+                break;
+        }
+
+        if (unlikely(sema_index < 0)) {
             DEFINE_WAIT(wq_entry);
             ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
             spin_unlock(&uctx->cells_sema->lock);
             rcu_read_unlock();
             prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
-            schedule();
+            schedule_timeout(msecs_to_jiffies(100));
             finish_wait(&kctx->wq, &wq_entry);
             goto retry;
         }
@@ -318,7 +328,7 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
             nwq = ubd->wqs[UBLKDRV_COPY_WQ];
             fallthrough;
         case UBLKDRV_CMD_OP_READ: {
-            int const rc = ublkdrv_req_submit_with_data(req);
+            int const rc = ublkdrv_req_cells_acquire(req);
             if (unlikely(rc)) {
                 ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
                 return;
