@@ -91,14 +91,9 @@ static void ublkdrv_release(struct gendisk* gd)
 {
 }
 
-static void ublkdrv_submit_bio(struct bio* bio)
+static void ublkdrv_submit_bio_fit(struct bio* bio, unsigned long start_j, struct ublkdrv_dev* ubd)
 {
     struct ublkdrv_req* req;
-
-    struct block_device* bdev   = bio->bi_bdev;
-    struct gendisk* gd          = bdev->bd_disk;
-    struct ublkdrv_dev* ubd     = gd->private_data;
-    unsigned long const start_j = bio_start_io_acct(bio);
 
     req = kzalloc_node(sizeof(*req), GFP_KERNEL, ubd->nid);
     if (unlikely(!req)) {
@@ -113,6 +108,22 @@ static void ublkdrv_submit_bio(struct bio* bio)
     req->ubd     = ubd;
 
     ublkdrv_dev_submit(req);
+}
+
+static void ublkdrv_submit_bio(struct bio* bio)
+{
+    struct block_device* bdev   = bio->bi_bdev;
+    struct gendisk* gd          = bdev->bd_disk;
+    struct ublkdrv_dev* ubd     = gd->private_data;
+    unsigned long const start_j = bio_start_io_acct(bio);
+
+    while ((bio_sectors(bio) << SECTOR_SHIFT) > ubd->kctx->params->max_req_sz) {
+        struct bio* new_bio = bio_split(bio, ubd->kctx->params->max_req_sz >> SECTOR_SHIFT, GFP_NOIO, &fs_bio_set);
+        bio_chain(new_bio, bio);
+        ublkdrv_submit_bio_fit(new_bio, 0, ubd);
+    }
+
+    ublkdrv_submit_bio_fit(bio, start_j, ubd);
 }
 
 static void ublkdrv_dev_id_free(unsigned long id)
@@ -424,6 +435,7 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
     set_capacity(gd, capacity_sectors);
 
     blk_queue_max_hw_sectors(gd->queue, ubd->kctx->cells_sz >> SECTOR_SHIFT);
+    blk_queue_chunk_sectors(gd->queue, ubd->kctx->cells_sz >> SECTOR_SHIFT);
     blk_queue_io_opt(gd->queue, ubd->kctx->cells_sz);
     blk_set_queue_depth(gd->queue, ubd->kctx->cmdb->cmds_len - 1);
     blk_queue_write_cache(gd->queue, true, false);

@@ -49,4 +49,10 @@ static inline void ublkdrv_req_endio(struct ublkdrv_req* req, blk_status_t bi_st
     bio_endio(bio);
 }
 
+static inline void ublkdrv_req_submit(struct ublkdrv_req* req, struct workqueue_struct* wq, void (*wh)(struct work_struct*))
+{
+    INIT_WORK(&req->work, wh);
+    queue_work(wq, &req->work);
+}
+
 #endif /* UBLKDRV_REQ_H */

@@ -154,7 +154,9 @@ void ublkdrv_req_finish_work_h(struct work_struct* work)
     struct ublkdrv_ctx* kctx = ubd->kctx;
 
     __ublkdrv_req_cells_free(req, kctx);
-    bio_end_io_acct(req->bio, req->start_j);
+    if (req->start_j)
+        bio_end_io_acct(req->bio, req->start_j);
+
     ublkdrv_req_endio(req, errno_to_blk_status(req->err));
 }
 
@@ -216,8 +218,7 @@ static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req)
     if (unlikely(!bio_sz))
         return 1;
 
-    if (unlikely(!(bio_sz <= kctx->params->max_req_sz)))
-        return -ENOTSUPP;
+    BUG_ON(!(bio_sz <= kctx->params->max_req_sz));
 
     bio_len_pgs = DIV_ROUND_UP(bio_sz, PAGE_SIZE);
 
@@ -350,12 +351,10 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
     nwh = nwh ?: ublkdrv_req_cfq_push_work_h;
     nwq = nwq ?: ubd->wqs[UBLKDRV_CFQ_PUSH_WQ];
 
-    INIT_WORK(&req->work, nwh);
-    queue_work(nwq, &req->work);
+    ublkdrv_req_submit(req, nwq, nwh);
 }
 
 void ublkdrv_dev_submit(struct ublkdrv_req* req)
 {
-    INIT_WORK(&req->work, ublkdrv_req_submit_work_h);
-    queue_work(req->ubd->wqs[UBLKDRV_SUBM_WQ], &req->work);
+    ublkdrv_req_submit(req, req->ubd->wqs[UBLKDRV_SUBM_WQ], ublkdrv_req_submit_work_h);
 }
