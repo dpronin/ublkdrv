@@ -186,8 +186,7 @@ void ublkdrv_req_copy_work_h(struct work_struct* work)
             break;
     }
 
-    INIT_WORK(&req->work, nwh);
-    queue_work(nwq, &req->work);
+    ublkdrv_req_submit(req, nwq, nwh);
 }
 
 static inline u32 ublkdrv_order_rounddown_and_clamp(u32 value, u32 min, u32 max)

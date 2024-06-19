@@ -125,8 +125,7 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
                 nwq = ubd->wqs[UBLKDRV_FIN_WQ];
             }
 
-            INIT_WORK(&req->work, nwh);
-            queue_work(nwq, &req->work);
+            ublkdrv_req_submit(req, nwq, nwh);
         }
     }
 }
