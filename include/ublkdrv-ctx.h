@@ -25,6 +25,7 @@ static_assert(0 != UBLKDRV_CELL_SZ_MAX && 0 == (UBLKDRV_CELL_SZ_MAX & (UBLKDRV_C
 static_assert(PAGE_SIZE <= UBLKDRV_CELL_SZ_MIN && UBLKDRV_CELL_SZ_MIN <= UBLKDRV_CELL_SZ_MAX, "UBLKDRV_CELL_SZ_MIN must be in range [PAGE_SIZE, UBLKDRV_CELL_SZ_MAX]");
 
 #define UBLKDRV_CTX_CELLS_GROUPS_NR (order_base_2(UBLKDRV_CELL_SZ_MAX / UBLKDRV_CELL_SZ_MIN) + 1)
+#define UBLKDRV_CTX_CELLS_PER_GROUP 32
 
 struct ublkdrv_cells_groups_ctx {
     spinlock_t lock;

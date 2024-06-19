@@ -4,24 +4,36 @@
 #include <linux/bitmap.h>
 #include <linux/bitops.h>
 #include <linux/errno.h>
+#include <linux/gfp.h>
+#include <linux/slab.h>
 #include <linux/types.h>
 
-#define UBLKDRV_CTX_CELLS_PER_GROUP 32
-
 struct cells_group_semaphore {
-    DECLARE_BITMAP(map, UBLKDRV_CTX_CELLS_PER_GROUP);
+    unsigned long* map;
+    unsigned int bits;
     unsigned int set_bits;
 };
 
-static inline int cells_group_semaphore_init(struct cells_group_semaphore* smbset)
+static inline int cells_group_semaphore_init(struct cells_group_semaphore* smbset, unsigned int bits, int nid)
 {
-    bitmap_fill(smbset->map, UBLKDRV_CTX_CELLS_PER_GROUP);
-    smbset->set_bits = UBLKDRV_CTX_CELLS_PER_GROUP;
+    unsigned int const len = BITS_TO_LONGS(bits);
+
+    smbset->map = kcalloc_node(len, sizeof(smbset->map[0]), GFP_KERNEL, nid);
+    if (!smbset->map)
+        return -ENOMEM;
+
+    bitmap_fill(smbset->map, bits);
+
+    smbset->bits     = bits;
+    smbset->set_bits = bits;
+
     return 0;
 }
 
 static inline void cells_group_semaphore_destroy(struct cells_group_semaphore* smbset)
 {
+    kfree(smbset->map);
+    smbset->map = NULL;
 }
 
 static inline unsigned int cells_group_semaphore_weight(struct cells_group_semaphore const* smbset)
@@ -31,7 +43,7 @@ static inline unsigned int cells_group_semaphore_weight(struct cells_group_semap
 
 static inline unsigned int cells_group_semaphore_weight_max(struct cells_group_semaphore const* smbset)
 {
-    return UBLKDRV_CTX_CELLS_PER_GROUP;
+    return smbset->bits;
 }
 
 static inline int cells_group_semaphore_trywait(struct cells_group_semaphore* smbset)
@@ -41,7 +53,7 @@ static inline int cells_group_semaphore_trywait(struct cells_group_semaphore* sm
     if (unlikely(!cells_group_semaphore_weight(smbset)))
         return -EBUSY;
 
-    bit = find_first_bit(smbset->map, UBLKDRV_CTX_CELLS_PER_GROUP);
+    bit = find_first_bit(smbset->map, cells_group_semaphore_weight_max(smbset));
     clear_bit(bit, smbset->map);
     --smbset->set_bits;
 

@@ -239,7 +239,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
             goto destroy_cells_groups_state;
         }
 
-        r = cells_group_semaphore_init(cells_group_state);
+        r = cells_group_semaphore_init(cells_group_state, UBLKDRV_CTX_CELLS_PER_GROUP, nid);
         if (r) {
             pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
             kfree(cells_group_state);
@@ -534,7 +534,7 @@ static int __init ublkdrv_init(void)
 {
     int rc = 0;
 
-    pr_info("%s-%s init for kernel %s, %s", module_name(THIS_MODULE), THIS_MODULE ? THIS_MODULE->version : "unknown", utsname()->version, utsname()->release);
+    pr_info("%s-%s init for kernel %s %s", module_name(THIS_MODULE), THIS_MODULE ? THIS_MODULE->version : "unknown", utsname()->release, utsname()->version);
 
     major = register_blkdev(major, UBLKDRV_BLKDEV_NAME);
     if (major <= 0) {
