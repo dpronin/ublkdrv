@@ -35,7 +35,7 @@
 #include "uapi/ublkdrv/cmdb_ack.h"
 #include "uapi/ublkdrv/def.h"
 
-#include "ublkdrv-sema-bitset.h"
+#include "ublkdrv-cells-group-semaphore.h"
 
 #include "ublkdrv-ctx.h"
 #include "ublkdrv-dev.h"
@@ -54,9 +54,6 @@ MODULE_VERSION("1.1.5");
 #define KiB_SHIFT 10
 #define MiB_SHIFT 20
 #define GiB_SHIFT 30
-
-#define UBLKDRV_CMDS_LEN_MIN 2u
-static_assert(!(UBLKDRV_CMDS_LEN_MIN < 2), "UBLKDRV_CMDS_LEN_MIN must be at least 2, this is by design");
 
 static int major;
 
@@ -165,7 +162,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     int r = -ENOMEM;
 
     cmds_len = (PAGE_ALIGN(sizeof(*cmdb)) - sizeof(*cmdb)) / sizeof(cmdb->cmds[0]);
-    cmds_len = clamp_t(u32, cmds_len, UBLKDRV_CMDS_LEN_MIN, U8_MAX);
+    cmds_len = clamp_t(u32, cmds_len, UBLKDRV_CMDS_LEN_MIN, UBLKDRV_CMDS_LEN_MAX);
 
     sz   = sizeof(*cmdb) + sizeof(cmdb->cmds[0]) * cmds_len;
     cmdb = kzalloc_node(PAGE_ALIGN(sz), GFP_KERNEL, nid);
@@ -176,7 +173,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     ctx->cmdb    = cmdb;
     ctx->cmdb_sz = sz;
 
-    sz    = UBLKDRV_CTX_CELLS_PER_BITSET * UBLKDRV_CELL_SZ_MIN * ((1u << UBLKDRV_CTX_SEMA_BITSETS_NR) - 1);
+    sz    = UBLKDRV_CTX_CELLS_PER_GROUP * UBLKDRV_CELL_SZ_MIN * ((1u << UBLKDRV_CTX_CELLS_GROUPS_NR) - 1);
     cells = vzalloc(sz);
     if (!cells)
         goto free_cmdb;
@@ -184,7 +181,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     ctx->cells    = cells;
     ctx->cells_sz = sz;
 
-    cellds_len = UBLKDRV_CTX_CELLS_PER_BITSET * UBLKDRV_CTX_SEMA_BITSETS_NR;
+    cellds_len = UBLKDRV_CTX_CELLS_PER_GROUP * UBLKDRV_CTX_CELLS_GROUPS_NR;
 
     sz    = sizeof(*cellc) + sizeof(cellc->cellds[0]) * cellds_len;
     cellc = kzalloc_node(PAGE_ALIGN(sz), GFP_KERNEL, nid);
@@ -202,7 +199,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
         celld->data_sz = 0;
         celld->ncelld  = ctx->cellc->cellds_len;
 
-        cell_off += UBLKDRV_CELL_SZ_MIN << (celldn / UBLKDRV_CTX_CELLS_PER_BITSET);
+        cell_off += UBLKDRV_CELL_SZ_MIN << (celldn / UBLKDRV_CTX_CELLS_PER_GROUP);
     }
 
     BUG_ON(ctx->cells_sz != cell_off);
@@ -224,29 +221,29 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
 
     idr_init(ctx->reqs);
 
-    ctx->cells_sema = kzalloc_node(sizeof(*ctx->cells_sema), GFP_KERNEL, nid);
-    if (!ctx->cells_sema) {
+    ctx->cells_groups_ctx = kzalloc_node(sizeof(*ctx->cells_groups_ctx), GFP_KERNEL, nid);
+    if (!ctx->cells_groups_ctx) {
         pr_err("unable to allocate cells bitset semaphore, out of memory\n");
         goto destroy_free_reqs;
     }
 
-    spin_lock_init(&ctx->cells_sema->lock);
+    spin_lock_init(&ctx->cells_groups_ctx->lock);
 
-    for (i = 0; i < ARRAY_SIZE(ctx->cells_sema->semas); ++i) {
-        struct sema_bitset* sema = kzalloc_node(sizeof(*sema), GFP_KERNEL, nid);
+    for (i = 0; i < ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state); ++i) {
+        struct cells_group_semaphore* sema = kzalloc_node(sizeof(*sema), GFP_KERNEL, nid);
         if (!sema) {
             pr_err("unable to alloc cells semaphore bitset[%i], out of memory\n", i);
             goto destroy_cells_sema;
         }
 
-        r = sema_bitset_init(sema);
+        r = cells_group_semaphore_init(sema);
         if (r) {
             pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
             kfree(sema);
             goto destroy_cells_sema;
         }
 
-        ctx->cells_sema->semas[i] = sema;
+        ctx->cells_groups_ctx->cells_groups_state[i] = sema;
     }
 
     params = kzalloc_node(sizeof(*params), GFP_KERNEL, nid);
@@ -265,12 +262,12 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
 
 destroy_cells_sema:
     for (j = i - 1; !(j < 0); --j) {
-        struct sema_bitset* sema = ctx->cells_sema->semas[j];
-        sema_bitset_destroy(sema);
+        struct cells_group_semaphore* sema = ctx->cells_groups_ctx->cells_groups_state[j];
+        cells_group_semaphore_destroy(sema);
         kfree(sema);
     }
-    kfree(ctx->cells_sema);
-    ctx->cells_sema = NULL;
+    kfree(ctx->cells_groups_ctx);
+    ctx->cells_groups_ctx = NULL;
 
 destroy_free_reqs:
     idr_destroy(ctx->reqs);
@@ -308,13 +305,13 @@ static void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
     kfree_const(ctx->params);
     ctx->params = NULL;
 
-    for (i = ARRAY_SIZE(ctx->cells_sema->semas) - 1; !(i < 0); --i) {
-        struct sema_bitset* sema = ctx->cells_sema->semas[i];
-        sema_bitset_destroy(sema);
+    for (i = ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state) - 1; !(i < 0); --i) {
+        struct cells_group_semaphore* sema = ctx->cells_groups_ctx->cells_groups_state[i];
+        cells_group_semaphore_destroy(sema);
         kfree(sema);
     }
-    kfree(ctx->cells_sema);
-    ctx->cells_sema = NULL;
+    kfree(ctx->cells_groups_ctx);
+    ctx->cells_groups_ctx = NULL;
 
     idr_destroy(ctx->reqs);
     kfree(ctx->reqs);

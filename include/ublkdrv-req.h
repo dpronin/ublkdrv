@@ -11,7 +11,7 @@
 #include "uapi/ublkdrv/cellc.h"
 #include "uapi/ublkdrv/cmd.h"
 
-#include "ublkdrv-sema-cells.h"
+#include "ublkdrv-ctx.h"
 
 struct ublkdrv_dev;
 
