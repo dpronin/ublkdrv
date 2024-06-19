@@ -13,10 +13,12 @@
 #include <linux/container_of.h>
 #include <linux/gfp_types.h>
 #include <linux/idr.h>
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/limits.h>
 #include <linux/math.h>
+#include <linux/module.h>
 #include <linux/nodemask.h>
 #include <linux/printk.h>
 #include <linux/rcupdate.h>
@@ -25,6 +27,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/uio_driver.h>
+#include <linux/utsname.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
@@ -529,21 +532,23 @@ void ublkdrv_dev_destroy(struct ublkdrv_dev* ubd)
 
 static int __init ublkdrv_init(void)
 {
-    int ret = 0;
+    int rc = 0;
+
+    pr_info("%s-%s init for kernel %s, %s", module_name(THIS_MODULE), THIS_MODULE ? THIS_MODULE->version : "unknown", utsname()->version, utsname()->release);
 
     major = register_blkdev(major, UBLKDRV_BLKDEV_NAME);
     if (major <= 0) {
         pr_err("register_blkdev() failed, err %i\n", major);
-        ret = -EINVAL;
+        rc = -EINVAL;
         goto out;
     }
 
     pr_info("register_blkdev() success, major %i\n", major);
 
-    ret = ublkdrv_genl_init();
-    if (ret) {
-        pr_err("ublkdrv_genl_init() failed, err %i\n", ret);
-        ret = -EINVAL;
+    rc = ublkdrv_genl_init();
+    if (rc) {
+        pr_err("ublkdrv_genl_init() failed, err %i\n", rc);
+        rc = -EINVAL;
         goto unreg;
     }
 
@@ -555,7 +560,7 @@ unreg:
     unregister_blkdev(major, UBLKDRV_BLKDEV_NAME);
 
 out:
-    return ret;
+    return rc;
 }
 
 static void __exit ublkdrv_exit(void)
