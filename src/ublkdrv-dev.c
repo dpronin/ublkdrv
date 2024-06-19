@@ -92,7 +92,7 @@ retry:
 
     idr_lock(uctx->reqs);
 
-    r = idr_alloc_u32(uctx->reqs, req, &req_id, uctx->cmdb->cmds_len - 1, GFP_NOWAIT);
+    r = idr_alloc_u32(uctx->reqs, req, &req_id, uctx->cmdb->cmds_len - 2, GFP_NOWAIT);
     if (unlikely(r)) {
         DEFINE_WAIT(wq_entry);
         idr_unlock(uctx->reqs);
