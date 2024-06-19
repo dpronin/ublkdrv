@@ -233,26 +233,26 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     spin_lock_init(&ctx->cells_groups_ctx->lock);
 
     for (i = 0; i < ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state); ++i) {
-        struct cells_group_semaphore* sema = kzalloc_node(sizeof(*sema), GFP_KERNEL, nid);
-        if (!sema) {
+        struct cells_group_semaphore* cells_group_state = kzalloc_node(sizeof(*cells_group_state), GFP_KERNEL, nid);
+        if (!cells_group_state) {
             pr_err("unable to alloc cells semaphore bitset[%i], out of memory\n", i);
-            goto destroy_cells_sema;
+            goto destroy_cells_groups_state;
         }
 
-        r = cells_group_semaphore_init(sema);
+        r = cells_group_semaphore_init(cells_group_state);
         if (r) {
             pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
-            kfree(sema);
-            goto destroy_cells_sema;
+            kfree(cells_group_state);
+            goto destroy_cells_groups_state;
         }
 
-        ctx->cells_groups_ctx->cells_groups_state[i] = sema;
+        ctx->cells_groups_ctx->cells_groups_state[i] = cells_group_state;
     }
 
     params = kzalloc_node(sizeof(*params), GFP_KERNEL, nid);
     if (!params) {
         pr_err("unable to allocate params, out of memory\n");
-        goto destroy_cells_sema;
+        goto destroy_cells_groups_state;
     }
 
     params->max_req_sz = ctx->cells_sz;
@@ -263,11 +263,11 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
 
     return 0;
 
-destroy_cells_sema:
+destroy_cells_groups_state:
     for (j = i - 1; !(j < 0); --j) {
-        struct cells_group_semaphore* sema = ctx->cells_groups_ctx->cells_groups_state[j];
-        cells_group_semaphore_destroy(sema);
-        kfree(sema);
+        struct cells_group_semaphore* cells_group_state = ctx->cells_groups_ctx->cells_groups_state[j];
+        cells_group_semaphore_destroy(cells_group_state);
+        kfree(cells_group_state);
     }
     kfree(ctx->cells_groups_ctx);
     ctx->cells_groups_ctx = NULL;
@@ -309,9 +309,9 @@ static void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
     ctx->params = NULL;
 
     for (i = ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state) - 1; !(i < 0); --i) {
-        struct cells_group_semaphore* sema = ctx->cells_groups_ctx->cells_groups_state[i];
-        cells_group_semaphore_destroy(sema);
-        kfree(sema);
+        struct cells_group_semaphore* cells_groups_state = ctx->cells_groups_ctx->cells_groups_state[i];
+        cells_group_semaphore_destroy(cells_groups_state);
+        kfree(cells_groups_state);
     }
     kfree(ctx->cells_groups_ctx);
     ctx->cells_groups_ctx = NULL;
