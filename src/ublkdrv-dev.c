@@ -200,7 +200,7 @@ static inline u32 ublkdrv_get_sema_index(struct ublkdrv_cells_groups_ctx* ctx, u
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(ctx->cells_groups_state) - 1);
 }
 
-static int ublkdrv_dev_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, unsigned int bio_sz, u32* fcdn)
+static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, unsigned int bio_sz, struct ublkdrv_req* req)
 {
     int sema_index;
 
@@ -261,16 +261,26 @@ static int ublkdrv_dev_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx
     BUG_ON(bio_len_pgs || bio_sz);
     BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
 
-    *fcdn = dummy_celld.ncelld;
+    switch (ublkdrv_cmd_get_op(&req->cmd)) {
+        case UBLKDRV_CMD_OP_READ:
+            ublkdrv_cmd_read_set_fcdn(&req->cmd.u.r, dummy_celld.ncelld);
+            ublkdrv_cmd_read_set_cds_nr(&req->cmd.u.r, (u16)cells_nr);
+            break;
+        case UBLKDRV_CMD_OP_WRITE:
+            ublkdrv_cmd_write_set_fcdn(&req->cmd.u.w, dummy_celld.ncelld);
+            ublkdrv_cmd_write_set_cds_nr(&req->cmd.u.w, (u16)cells_nr);
+            break;
+        default:
+            BUG();
+    }
 
-    return cells_nr;
+    return 0;
 }
 
 static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req)
 {
     struct ublkdrv_ctx* uctx;
-    u32 fcdn;
-    int cells_nr;
+    int rc;
 
     struct bio const* bio    = req->bio;
     struct ublkdrv_dev* ubd  = req->ubd;
@@ -291,11 +301,11 @@ retry:
         return -ENOLINK;
     }
 
-    cells_nr = ublkdrv_dev_cells_acquire(ubd, uctx, bio_sz, &fcdn);
+    rc = ublkdrv_dev_req_cells_acquire(ubd, uctx, bio_sz, req);
 
     rcu_read_unlock();
 
-    if (unlikely(cells_nr < 0)) {
+    if (unlikely(rc)) {
         DEFINE_WAIT(wq_entry);
         prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
         schedule_timeout(msecs_to_jiffies(100));
@@ -303,18 +313,12 @@ retry:
         goto retry;
     }
 
-    BUG_ON(!(cells_nr <= U16_MAX));
-
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_READ:
             ublkdrv_cmd_read_set_offset(&req->cmd.u.r, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            ublkdrv_cmd_read_set_fcdn(&req->cmd.u.r, fcdn);
-            ublkdrv_cmd_read_set_cds_nr(&req->cmd.u.r, (u16)cells_nr);
             break;
         case UBLKDRV_CMD_OP_WRITE:
             ublkdrv_cmd_write_set_offset(&req->cmd.u.w, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            ublkdrv_cmd_write_set_fcdn(&req->cmd.u.w, fcdn);
-            ublkdrv_cmd_write_set_cds_nr(&req->cmd.u.w, (u16)cells_nr);
             break;
         default:
             BUG();
