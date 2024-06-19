@@ -239,7 +239,7 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
             goto destroy_cells_sema;
         }
 
-        r = sema_bitset_init(sema, UBLKDRV_CTX_CELLS_PER_BITSET);
+        r = sema_bitset_init(sema);
         if (r) {
             pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
             kfree(sema);
