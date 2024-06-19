@@ -51,7 +51,7 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pronin Denis <dannftk@yandex.ru>");
 MODULE_DESCRIPTION("UBLKDRV");
 MODULE_INFO(supported, "external");
-MODULE_VERSION("1.1.5");
+MODULE_VERSION("1.2.0");
 // MODULE_VERSION(__stringify(VERSION));
 
 #define KiB_SHIFT 10
