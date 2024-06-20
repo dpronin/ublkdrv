@@ -9,7 +9,6 @@
 #include <linux/compiler.h>
 #include <linux/container_of.h>
 #include <linux/gfp_types.h>
-#include <linux/idr.h>
 #include <linux/kernel.h>
 #include <linux/preempt.h>
 #include <linux/printk.h>
@@ -81,10 +80,12 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
 
     while (cmds--) {
         struct ublkdrv_ctx* uctx;
-        struct ublkdrv_req* req;
         struct ublkdrv_cmdb_ack* cmdb_ack;
         struct ublkdrv_cellc* cellc;
         struct ublkdrv_cmd_ack cmd_ack;
+        u8 cmd_id;
+
+        struct ublkdrv_req* req;
 
     retry:
         rcu_read_lock();
@@ -104,13 +105,20 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
             goto retry;
         }
 
-        idr_lock(uctx->reqs);
-        req = idr_remove(uctx->reqs, ublkdrv_cmd_ack_get_id(&cmd_ack));
-        idr_unlock(uctx->reqs);
+        req    = NULL;
+        cmd_id = ublkdrv_cmd_ack_get_id(&cmd_ack);
+
+        spin_lock(&uctx->ku_state_ctx->lock);
+
+        if (likely(0 == dynamic_bitmap_semaphore_post(uctx->ku_state_ctx->cmds_ids, cmd_id))) {
+            BUG_ON(!uctx->ku_state_ctx->reqs_pending[cmd_id]);
+            req                                      = uctx->ku_state_ctx->reqs_pending[cmd_id];
+            uctx->ku_state_ctx->reqs_pending[cmd_id] = NULL;
+        }
+
+        spin_unlock(&uctx->ku_state_ctx->lock);
 
         rcu_read_unlock();
-
-        wake_up_interruptible(&kctx->wq);
 
         if (likely(req)) {
             void (*nwh)(struct work_struct*);
@@ -184,15 +192,15 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
     struct ublkdrv_uio* uio = vma->vm_private_data;
     struct ublkdrv_dev* ubd = uio->priv;
     u32 const mem_id        = vma->vm_pgoff;
+
     pr_debug("%s: vma_close(), mi %u", ubd->name, mem_id);
+
     /* clang-format off */
     if (test_and_clear_bit(mem_id, &uio->flags)
         && !smp_load_acquire(&ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER]->flags)
         && !smp_load_acquire(&ubd->uios[UBLKDRV_UIO_DIR_USER_TO_KERNEL]->flags)) {
         /* clang-format on */
 
-        struct ublkdrv_req* req;
-        int req_id;
         u32 celldn;
         int i;
 
@@ -202,15 +210,19 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
 
         synchronize_rcu();
 
-        for (i = 0; i < ARRAY_SIZE(ubd->wqs); ++i)
-            flush_workqueue(ubd->wqs[i]);
+        flush_workqueue(ubd->wqs[UBLKDRV_CFQ_PUSH_WQ]);
+        flush_workqueue(ubd->wqs[UBLKDRV_CFQ_POP_WQ]);
 
-        idr_for_each_entry(kctx->reqs, req, req_id)
-        {
-            ublkdrv_req_cells_free(req, kctx);
-            ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
+        for (i = 0; i < kctx->cmdb->cmds_len - 1; ++i) {
+            struct ublkdrv_req* req = kctx->ku_state_ctx->reqs_pending[i];
+            if (req) {
+                BUG_ON(dynamic_bitmap_semaphore_post(kctx->ku_state_ctx->cmds_ids, i));
+                kctx->ku_state_ctx->reqs_pending[i] = NULL;
+                req->err                            = -ENOLINK;
+                ublkdrv_req_cells_free(req, kctx);
+                ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
+            }
         }
-        idr_destroy(kctx->reqs);
 
         kctx->cmdb->tail = 0;
         memset(kctx->cmdb->cmds, 0, sizeof(kctx->cmdb->cmds[0]) * kctx->cmdb->cmds_len);
@@ -226,6 +238,7 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
         kctx->cmdb_ack->tail = 0;
         memset(kctx->cmdb_ack->cmds, 0, sizeof(kctx->cmdb_ack->cmds[0]) * kctx->cmdb_ack->cmds_len);
     }
+
     ubd->ops->release(ubd);
 }
 

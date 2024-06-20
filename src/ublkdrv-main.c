@@ -12,7 +12,6 @@
 #include <linux/compiler_types.h>
 #include <linux/container_of.h>
 #include <linux/gfp_types.h>
-#include <linux/idr.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
@@ -216,18 +215,36 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     ctx->cmdb_ack    = cmdb_ack;
     ctx->cmdb_ack_sz = sz;
 
-    ctx->reqs = kzalloc_node(sizeof(*ctx->reqs), GFP_KERNEL, nid);
-    if (!ctx->reqs) {
-        pr_err("unable to allocate an IDR for bio commands, out of memory\n");
+    ctx->ku_state_ctx = kzalloc_node(sizeof(*ctx->ku_state_ctx), GFP_KERNEL, nid);
+    if (!ctx->ku_state_ctx) {
+        pr_err("unable to allocate a kernel/user state context, out of memory\n");
         goto free_cmdb_ack;
     }
 
-    idr_init(ctx->reqs);
+    spin_lock_init(&ctx->ku_state_ctx->lock);
+
+    ctx->ku_state_ctx->cmds_ids = kzalloc_node(sizeof(*ctx->ku_state_ctx->cmds_ids), GFP_KERNEL, nid);
+    if (!ctx->ku_state_ctx->cmds_ids) {
+        pr_err("unable to allocate command IDs semaphore bitmap, out of memory\n");
+        goto free_ku_state_ctx;
+    }
+
+    r = dynamic_bitmap_semaphore_init(ctx->ku_state_ctx->cmds_ids, cmdb->cmds_len - 1, nid);
+    if (r) {
+        pr_err("unable to init command IDs semaphore bitmap, err %i\n", r);
+        goto free_cmds_ids;
+    }
+
+    ctx->ku_state_ctx->reqs_pending = kcalloc_node(cmdb->cmds_len - 1, sizeof(ctx->ku_state_ctx->reqs_pending[0]), GFP_KERNEL, nid);
+    if (!ctx->ku_state_ctx->reqs_pending) {
+        pr_err("unable to allocate storage for pending requests, out of memory\n");
+        goto destroy_cmds_ids;
+    }
 
     ctx->cells_groups_ctx = kzalloc_node(sizeof(*ctx->cells_groups_ctx), GFP_KERNEL, nid);
     if (!ctx->cells_groups_ctx) {
-        pr_err("unable to allocate cells bitset semaphore, out of memory\n");
-        goto destroy_free_reqs;
+        pr_err("unable to allocate cells bitmap semaphore, out of memory\n");
+        goto free_reqs_pending;
     }
 
     spin_lock_init(&ctx->cells_groups_ctx->lock);
@@ -235,13 +252,13 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     for (i = 0; i < ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state); ++i) {
         struct dynamic_bitmap_semaphore* cells_group_state = kzalloc_node(sizeof(*cells_group_state), GFP_KERNEL, nid);
         if (!cells_group_state) {
-            pr_err("unable to alloc cells semaphore bitset[%i], out of memory\n", i);
+            pr_err("unable to alloc cells semaphore bitmap[%i], out of memory\n", i);
             goto destroy_cells_groups_state;
         }
 
         r = dynamic_bitmap_semaphore_init(cells_group_state, UBLKDRV_CTX_CELLS_PER_GROUP, nid);
         if (r) {
-            pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
+            pr_err("unable to init cells semaphore bitmap[%i], err %i\n", i, r);
             kfree(cells_group_state);
             goto destroy_cells_groups_state;
         }
@@ -272,10 +289,18 @@ destroy_cells_groups_state:
     kfree(ctx->cells_groups_ctx);
     ctx->cells_groups_ctx = NULL;
 
-destroy_free_reqs:
-    idr_destroy(ctx->reqs);
-    kfree(ctx->reqs);
-    ctx->reqs = NULL;
+free_reqs_pending:
+    kfree(ctx->ku_state_ctx->reqs_pending);
+
+destroy_cmds_ids:
+    dynamic_bitmap_semaphore_destroy(ctx->ku_state_ctx->cmds_ids);
+
+free_cmds_ids:
+    kfree(ctx->ku_state_ctx->cmds_ids);
+
+free_ku_state_ctx:
+    kfree(ctx->ku_state_ctx);
+    ctx->ku_state_ctx = NULL;
 
 free_cmdb_ack:
     kfree(cmdb_ack);
@@ -316,9 +341,11 @@ static void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
     kfree(ctx->cells_groups_ctx);
     ctx->cells_groups_ctx = NULL;
 
-    idr_destroy(ctx->reqs);
-    kfree(ctx->reqs);
-    ctx->reqs = NULL;
+    kfree(ctx->ku_state_ctx->reqs_pending);
+    dynamic_bitmap_semaphore_destroy(ctx->ku_state_ctx->cmds_ids);
+    kfree(ctx->ku_state_ctx->cmds_ids);
+    kfree(ctx->ku_state_ctx);
+    ctx->ku_state_ctx = NULL;
 
     kfree(ctx->cmdb_ack);
     ctx->cmdb_ack    = NULL;
@@ -454,19 +481,19 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
         goto destroy_wqs;
     }
 
-    ubd->wqs[UBLKDRV_CFQ_POP_WQ] = alloc_workqueue("kcmdcomp/%s", 0, 1, gd->disk_name);
+    ubd->wqs[UBLKDRV_CFQ_POP_WQ] = alloc_workqueue("kcmdcomp/%s", WQ_UNBOUND, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_CFQ_POP_WQ]) {
         pr_err("unable to allocate a workqueue for cfq commands popping, out of memory\n");
         goto destroy_wqs;
     }
 
-    ubd->wqs[UBLKDRV_CFQ_PUSH_WQ] = alloc_workqueue("kcfqpush/%s", 0, 1, gd->disk_name);
+    ubd->wqs[UBLKDRV_CFQ_PUSH_WQ] = alloc_workqueue("kcfqpush/%s", WQ_UNBOUND, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_CFQ_PUSH_WQ]) {
         pr_err("unable to allocate a workqueue for cfq commands pushing, out of memory\n");
         goto put_disk;
     }
 
-    ubd->wqs[UBLKDRV_SUBM_WQ] = alloc_workqueue("kreqsubm/%s", WQ_UNBOUND, 0, gd->disk_name);
+    ubd->wqs[UBLKDRV_SUBM_WQ] = alloc_workqueue("kreqsubm/%s", 0, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_SUBM_WQ]) {
         pr_err("unable to allocate a workqueue for requests submission, out of memory\n");
         goto destroy_wqs;

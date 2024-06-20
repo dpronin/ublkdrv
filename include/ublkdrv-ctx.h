@@ -2,7 +2,6 @@
 #define UBLKDRV_CTX_H
 
 #include <linux/bug.h>
-#include <linux/idr.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
@@ -32,6 +31,12 @@ struct ublkdrv_cells_groups_ctx {
     struct dynamic_bitmap_semaphore* cells_groups_state[UBLKDRV_CTX_CELLS_GROUPS_NR];
 };
 
+struct ublkdrv_kernel_user_state_ctx {
+    spinlock_t lock;
+    struct dynamic_bitmap_semaphore* cmds_ids;
+    struct ublkdrv_req** reqs_pending;
+};
+
 struct ublkdrv_ctx_params {
     u32 max_req_sz;
 };
@@ -51,7 +56,7 @@ struct ublkdrv_ctx {
     struct ublkdrv_cmdb_ack* cmdb_ack;
     size_t cmdb_ack_sz;
 
-    struct idr* reqs;
+    struct ublkdrv_kernel_user_state_ctx* ku_state_ctx;
     struct ublkdrv_cells_groups_ctx* cells_groups_ctx;
 
     struct wait_queue_head wq;

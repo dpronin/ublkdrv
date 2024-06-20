@@ -8,7 +8,6 @@
 #include <linux/build_bug.h>
 #include <linux/compiler.h>
 #include <linux/container_of.h>
-#include <linux/idr.h>
 #include <linux/jiffies.h>
 #include <linux/math.h>
 #include <linux/rcupdate.h>
@@ -66,9 +65,7 @@ static inline void __ublkdrv_req_cells_free(struct ublkdrv_req const* req, struc
 static void ublkdrv_req_cfq_push_work_h(struct work_struct* work)
 {
     struct ublkdrv_ctx* uctx;
-    u32 cmd_id;
-    int r;
-    bool reqs_preloaded;
+    int cmd_id;
 
     struct ublkdrv_req* req  = container_of(work, struct ublkdrv_req, work);
     struct ublkdrv_dev* ubd  = req->ubd;
@@ -77,8 +74,6 @@ static void ublkdrv_req_cfq_push_work_h(struct work_struct* work)
 
 retry:
     cmd_id = 0;
-
-    idr_preload(GFP_KERNEL);
 
     rcu_read_lock();
 
@@ -91,61 +86,46 @@ retry:
         return;
     }
 
-    idr_lock(uctx->reqs);
+    spin_lock(&uctx->ku_state_ctx->lock);
 
-    r = idr_alloc_u32(uctx->reqs, req, &cmd_id, uctx->cmdb->cmds_len - 2, GFP_NOWAIT);
-    if (unlikely(r)) {
+    cmd_id = dynamic_bitmap_semaphore_trywait(uctx->ku_state_ctx->cmds_ids);
+    if (unlikely(cmd_id < 0)) {
         DEFINE_WAIT(wq_entry);
-        idr_unlock(uctx->reqs);
+        spin_unlock(&uctx->ku_state_ctx->lock);
         rcu_read_unlock();
-        idr_preload_end();
         prepare_to_wait(&kctx->wq, &wq_entry, TASK_INTERRUPTIBLE);
         schedule_timeout(msecs_to_jiffies(100));
         finish_wait(&kctx->wq, &wq_entry);
         goto retry;
     }
 
+    BUG_ON(uctx->ku_state_ctx->reqs_pending[cmd_id]);
+    uctx->ku_state_ctx->reqs_pending[cmd_id] = req;
+
+    spin_unlock(&uctx->ku_state_ctx->lock);
+
     ublkdrv_cmd_set_id(&req->cmd, (u8)cmd_id);
 
-    for (reqs_preloaded = true; uctx && !ublkdrv_cfq_push(uctx->cmdb->cmds, uctx->cmdb->cmds_len, &uctx->cellc->cmdb_head, &uctx->cmdb->tail, &req->cmd);) {
-        idr_unlock(uctx->reqs);
+    for (uctx = rcu_dereference(ubd->uctx);
+         uctx && !ublkdrv_cfq_push(uctx->cmdb->cmds, uctx->cmdb->cmds_len, &uctx->cellc->cmdb_head, &uctx->cmdb->tail, &req->cmd);
+         uctx = rcu_dereference(ubd->uctx)) {
         rcu_read_unlock();
-
-        if (reqs_preloaded) {
-            idr_preload_end();
-            reqs_preloaded = false;
-        }
-
         schedule();
-
         rcu_read_lock();
-
-        uctx = rcu_dereference(ubd->uctx);
-        if (unlikely(!uctx)) {
-            rcu_read_unlock();
-            continue;
-        }
-
-        idr_lock(uctx->reqs);
     }
-
-    if (likely(uctx)) {
-        idr_unlock(uctx->reqs);
-        rcu_read_unlock();
-    }
-
-    if (likely(reqs_preloaded))
-        idr_preload_end();
 
     if (likely(uctx)) {
         uio_event_notify(uinfo);
     } else {
-        idr_lock(kctx->reqs);
-        idr_remove(kctx->reqs, cmd_id);
-        idr_unlock(kctx->reqs);
+        spin_lock(&uctx->ku_state_ctx->lock);
+        BUG_ON(dynamic_bitmap_semaphore_post(uctx->ku_state_ctx->cmds_ids, cmd_id));
+        uctx->ku_state_ctx->reqs_pending[cmd_id] = NULL;
+        spin_unlock(&uctx->ku_state_ctx->lock);
         __ublkdrv_req_cells_free(req, kctx);
         ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
     }
+
+    rcu_read_unlock();
 }
 
 void ublkdrv_req_finish_work_h(struct work_struct* work)
