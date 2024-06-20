@@ -66,19 +66,10 @@ static int ublkdrv_uio_release(struct uio_info* uio, struct inode* inode)
 static void
 ublkdrv_cfq_pop_work_h(struct work_struct* work)
 {
-    struct ublkdrv_cmd_complete_work* ccw;
-    struct ublkdrv_dev* ubd;
-    struct ublkdrv_ctx* kctx;
-    struct uio_info* uio;
-    u32 cmds;
+    struct ublkdrv_cmd_complete_work* ccw = container_of(work, struct ublkdrv_cmd_complete_work, work);
+    struct ublkdrv_dev* ubd               = ccw->ubd;
 
-    ccw  = container_of(work, struct ublkdrv_cmd_complete_work, work);
-    ubd  = ccw->ubd;
-    kctx = ubd->kctx;
-    cmds = ccw->cmds;
-    uio  = &ubd->uios[UBLKDRV_UIO_DIR_USER_TO_KERNEL]->uio;
-
-    while (cmds--) {
+    for (u32 cmds = ccw->cmds; cmds--;) {
         struct ublkdrv_ctx* uctx;
         struct ublkdrv_cmdb_ack* cmdb_ack;
         struct ublkdrv_cellc* cellc;

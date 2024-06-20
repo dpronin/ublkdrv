@@ -176,14 +176,14 @@ static inline u32 ublkdrv_order_rounddown_and_clamp(u32 value, u32 min, u32 max)
     return clamp_t(u32, order, min, max);
 }
 
-static inline u32 ublkdrv_get_sema_index(struct ublkdrv_cells_groups_ctx* ctx, u32 pages_nr)
+static inline u32 ublkdrv_cell_gr_index_get(struct ublkdrv_cells_groups_ctx* ctx, u32 pages_nr)
 {
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(ctx->cells_groups_state) - 1);
 }
 
 static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, unsigned int bio_sz, struct ublkdrv_req* req)
 {
-    int sema_index;
+    int cell_gr_index;
 
     struct ublkdrv_cellc const* cellc = uctx->cellc;
     struct ublkdrv_celld dummy_celld  = {
@@ -197,7 +197,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
 
     spin_lock(&cells_groups_ctx->lock);
 
-    sema_index = ARRAY_SIZE(cells_groups_ctx->cells_groups_state) - 1;
+    cell_gr_index = ARRAY_SIZE(cells_groups_ctx->cells_groups_state) - 1;
 
     for (struct ublkdrv_celld *prev_celld = &dummy_celld, *celld = NULL;
          cells_nr <= U16_MAX && bio_len_pgs && bio_sz;
@@ -205,30 +205,30 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
 
         u32 celldn;
 
-        u32 const sema_index_min = ublkdrv_get_sema_index(cells_groups_ctx, bio_len_pgs);
+        u32 const cell_gr_index_min_required = ublkdrv_cell_gr_index_get(cells_groups_ctx, bio_len_pgs);
 
-        sema_index = min_t(int, sema_index, sema_index_min);
+        cell_gr_index = min_t(int, cell_gr_index, cell_gr_index_min_required);
 
-        for (; !(sema_index < 0); --sema_index) {
-            celldn = dynamic_bitmap_semaphore_trywait(cells_groups_ctx->cells_groups_state[sema_index]);
+        for (; !(cell_gr_index < 0); --cell_gr_index) {
+            celldn = dynamic_bitmap_semaphore_trywait(cells_groups_ctx->cells_groups_state[cell_gr_index]);
             if (likely(!(celldn < 0) && celldn < UBLKDRV_CTX_CELLS_PER_GROUP))
                 break;
         }
 
-        if (unlikely(sema_index < 0)) {
+        if (unlikely(cell_gr_index < 0)) {
             ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
             spin_unlock(&cells_groups_ctx->lock);
             return -EBUSY;
         }
 
-        celldn += sema_index * UBLKDRV_CTX_CELLS_PER_GROUP;
+        celldn += cell_gr_index * UBLKDRV_CTX_CELLS_PER_GROUP;
 
         celld = &uctx->cellc->cellds[celldn];
 
-        celld->data_sz = min_t(u32, bio_sz, UBLKDRV_CELL_SZ_MIN << sema_index);
+        celld->data_sz = min_t(u32, bio_sz, UBLKDRV_CELL_SZ_MIN << cell_gr_index);
 
         prev_celld->ncelld = celldn;
-        bio_len_pgs -= 1u << sema_index;
+        bio_len_pgs -= 1u << cell_gr_index;
     }
 
     if (unlikely(!(cells_nr <= U16_MAX))) {
