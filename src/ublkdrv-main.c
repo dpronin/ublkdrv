@@ -38,7 +38,7 @@
 #include "uapi/ublkdrv/cmdb_ack.h"
 #include "uapi/ublkdrv/def.h"
 
-#include "ublkdrv-cells-group-semaphore.h"
+#include "ublkdrv-dynamic-bitmap-semaphore.h"
 
 #include "ublkdrv-ctx.h"
 #include "ublkdrv-dev.h"
@@ -233,13 +233,13 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
     spin_lock_init(&ctx->cells_groups_ctx->lock);
 
     for (i = 0; i < ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state); ++i) {
-        struct cells_group_semaphore* cells_group_state = kzalloc_node(sizeof(*cells_group_state), GFP_KERNEL, nid);
+        struct dynamic_bitmap_semaphore* cells_group_state = kzalloc_node(sizeof(*cells_group_state), GFP_KERNEL, nid);
         if (!cells_group_state) {
             pr_err("unable to alloc cells semaphore bitset[%i], out of memory\n", i);
             goto destroy_cells_groups_state;
         }
 
-        r = cells_group_semaphore_init(cells_group_state, UBLKDRV_CTX_CELLS_PER_GROUP, nid);
+        r = dynamic_bitmap_semaphore_init(cells_group_state, UBLKDRV_CTX_CELLS_PER_GROUP, nid);
         if (r) {
             pr_err("unable to init cells semaphore bitset[%i], err %i\n", i, r);
             kfree(cells_group_state);
@@ -265,8 +265,8 @@ static int ublkdrv_ctx_init(struct ublkdrv_ctx* ctx, int nid)
 
 destroy_cells_groups_state:
     for (j = i - 1; !(j < 0); --j) {
-        struct cells_group_semaphore* cells_group_state = ctx->cells_groups_ctx->cells_groups_state[j];
-        cells_group_semaphore_destroy(cells_group_state);
+        struct dynamic_bitmap_semaphore* cells_group_state = ctx->cells_groups_ctx->cells_groups_state[j];
+        dynamic_bitmap_semaphore_destroy(cells_group_state);
         kfree(cells_group_state);
     }
     kfree(ctx->cells_groups_ctx);
@@ -309,8 +309,8 @@ static void ublkdrv_ctx_deinit(struct ublkdrv_ctx* ctx)
     ctx->params = NULL;
 
     for (i = ARRAY_SIZE(ctx->cells_groups_ctx->cells_groups_state) - 1; !(i < 0); --i) {
-        struct cells_group_semaphore* cells_groups_state = ctx->cells_groups_ctx->cells_groups_state[i];
-        cells_group_semaphore_destroy(cells_groups_state);
+        struct dynamic_bitmap_semaphore* cells_groups_state = ctx->cells_groups_ctx->cells_groups_state[i];
+        dynamic_bitmap_semaphore_destroy(cells_groups_state);
         kfree(cells_groups_state);
     }
     kfree(ctx->cells_groups_ctx);

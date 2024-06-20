@@ -23,6 +23,7 @@
 
 #include "ublkdrv-cfq.h"
 #include "ublkdrv-ctx.h"
+#include "ublkdrv-dynamic-bitmap-semaphore.h"
 #include "ublkdrv-priv.h"
 #include "ublkdrv-req.h"
 #include "ublkdrv-uio.h"
@@ -229,7 +230,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
         sema_index = min_t(int, sema_index, sema_index_min);
 
         for (; !(sema_index < 0); --sema_index) {
-            celldn = cells_group_semaphore_trywait(cells_groups_ctx->cells_groups_state[sema_index]);
+            celldn = dynamic_bitmap_semaphore_trywait(cells_groups_ctx->cells_groups_state[sema_index]);
             if (likely(!(celldn < 0) && celldn < UBLKDRV_CTX_CELLS_PER_GROUP))
                 break;
         }

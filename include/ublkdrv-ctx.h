@@ -11,7 +11,7 @@
 #include "uapi/ublkdrv/cmdb.h"
 #include "uapi/ublkdrv/cmdb_ack.h"
 
-#include "ublkdrv-cells-group-semaphore.h"
+#include "ublkdrv-dynamic-bitmap-semaphore.h"
 
 #define UBLKDRV_CMDS_LEN_MIN 2u
 #define UBLKDRV_CMDS_LEN_MAX U8_MAX
@@ -29,7 +29,7 @@ static_assert(PAGE_SIZE <= UBLKDRV_CELL_SZ_MIN && UBLKDRV_CELL_SZ_MIN <= UBLKDRV
 
 struct ublkdrv_cells_groups_ctx {
     spinlock_t lock;
-    struct cells_group_semaphore* cells_groups_state[UBLKDRV_CTX_CELLS_GROUPS_NR];
+    struct dynamic_bitmap_semaphore* cells_groups_state[UBLKDRV_CTX_CELLS_GROUPS_NR];
 };
 
 struct ublkdrv_ctx_params {
@@ -63,7 +63,7 @@ static inline void ublkdrv_sema_cells_free(struct ublkdrv_ctx* ctx, u32 celldn, 
     for (; cellds_len && celldn < ctx->cellc->cellds_len;
          --cellds_len, celldn = celld->ncelld, celld = &ctx->cellc->cellds[celldn]) {
 
-        BUG_ON(cells_group_semaphore_post(ctx->cells_groups_ctx->cells_groups_state[celldn / UBLKDRV_CTX_CELLS_PER_GROUP], celldn % UBLKDRV_CTX_CELLS_PER_GROUP));
+        BUG_ON(dynamic_bitmap_semaphore_post(ctx->cells_groups_ctx->cells_groups_state[celldn / UBLKDRV_CTX_CELLS_PER_GROUP], celldn % UBLKDRV_CTX_CELLS_PER_GROUP));
     }
 }
 
