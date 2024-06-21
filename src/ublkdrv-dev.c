@@ -188,19 +188,20 @@ static inline u32 ublkdrv_cell_gr_index_get(struct ublkdrv_cells_groups_ctx* ctx
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(ctx->cells_groups_state) - 1);
 }
 
-static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, struct ublkdrv_ku_gate* ku_gate, unsigned int sz, struct ublkdrv_req* req)
+static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ku_gate* ku_gate, unsigned int sz, struct ublkdrv_req* req)
 {
     int cell_gr_index;
 
-    struct ublkdrv_cellc const* cellc = uctx->cellc;
-    struct ublkdrv_celld dummy_celld  = {
-         .offset  = 0u,
-         .data_sz = 0u,
-         .ncelld  = cellc->cellds_len,
+    struct ublkdrv_ctx* ctx          = ubd->ctx;
+    struct ublkdrv_cellc* cellc      = ctx->cellc;
+    struct ublkdrv_celld dummy_celld = {
+        .offset  = 0u,
+        .data_sz = 0u,
+        .ncelld  = cellc->cellds_len,
     };
     int cells_nr                                      = 0;
     unsigned int pages_nr                             = DIV_ROUND_UP(sz, PAGE_SIZE);
-    struct ublkdrv_cells_groups_ctx* cells_groups_ctx = uctx->cells_groups_ctx;
+    struct ublkdrv_cells_groups_ctx* cells_groups_ctx = ctx->cells_groups_ctx;
 
     spin_lock(&cells_groups_ctx->lock);
 
@@ -208,7 +209,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
 
     for (struct ublkdrv_celld *prev_celld = &dummy_celld, *celld = NULL;
          cells_nr <= U16_MAX && pages_nr && sz;
-         ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, sz -= celld->data_sz, prev_celld = celld) {
+         ++cells_nr, sz -= celld->data_sz, prev_celld = celld) {
 
         u32 celldn;
 
@@ -223,23 +224,24 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
         }
 
         if (unlikely(cell_gr_index < 0)) {
-            ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
+            ublkdrv_sema_cells_free(ctx, dummy_celld.ncelld, cells_nr);
             spin_unlock(&cells_groups_ctx->lock);
             return -EBUSY;
         }
 
         celldn += cell_gr_index * UBLKDRV_CTX_CELLS_PER_GROUP;
 
-        celld = &uctx->cellc->cellds[celldn];
+        celld = &cellc->cellds[celldn];
 
         celld->data_sz = min_t(u32, sz, UBLKDRV_CELL_SZ_MIN << cell_gr_index);
+        celld->ncelld  = cellc->cellds_len;
 
         prev_celld->ncelld = celldn;
         pages_nr -= 1u << cell_gr_index;
     }
 
     if (unlikely(!(cells_nr <= U16_MAX))) {
-        ublkdrv_sema_cells_free(uctx, dummy_celld.ncelld, cells_nr);
+        ublkdrv_sema_cells_free(ctx, dummy_celld.ncelld, cells_nr);
         spin_unlock(&cells_groups_ctx->lock);
         return -ENOTSUPP;
     }
@@ -247,7 +249,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
     spin_unlock(&cells_groups_ctx->lock);
 
     BUG_ON(pages_nr || sz);
-    BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
+    BUG_ON(cells_nr && !(dummy_celld.ncelld < cellc->cellds_len));
 
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_READ:
@@ -287,7 +289,7 @@ retry:
         return -ENOLINK;
     }
 
-    rc = ublkdrv_dev_req_cells_acquire(ubd, ctx, ku_gate, sz, req);
+    rc = ublkdrv_dev_req_cells_acquire(ubd, ku_gate, sz, req);
 
     rcu_read_unlock();
 
