@@ -194,7 +194,6 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
         && !smp_load_acquire(&ubd->uios[UBLKDRV_UIO_DIR_USER_TO_KERNEL]->flags)) {
         /* clang-format on */
 
-        u32 celldn;
         int i;
         struct ublkdrv_ku_gate* ku_gate;
         struct ublkdrv_uk_gate* uk_gate;
@@ -229,14 +228,6 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
                 ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
             }
         }
-
-        for (celldn = 0; celldn < ctx->cellc->cellds_len; ++celldn) {
-            struct ublkdrv_celld* celld = &ctx->cellc->cellds[celldn];
-
-            celld->data_sz = 0;
-            celld->ncelld  = ctx->cellc->cellds_len;
-        }
-        memset(ctx->cells, 0, ctx->cells_sz);
     }
 
     ubd->ops->release(ubd);
