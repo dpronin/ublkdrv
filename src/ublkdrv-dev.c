@@ -310,7 +310,7 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
     struct ublkdrv_req* req = container_of(work, struct ublkdrv_req, work);
     struct bio* bio         = req->bio;
     struct ublkdrv_dev* ubd = req->ubd;
-    int const op            = ublkdrv_bio_to_cmd_op(req->bio);
+    int const op            = ublkdrv_bio_to_cmd_op(bio);
     if (op < 0) {
         ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
         return;

@@ -319,7 +319,7 @@ static int ublkdrv_uio_mmap(struct uio_info* info, struct vm_area_struct* vma)
         && !rcu_access_pointer(ubd->ku_gate)) {
         /* clang-format on */
 
-        struct ublkdrv_ku_gate* ku_gate = kzalloc(sizeof(*ku_gate), GFP_KERNEL);
+        struct ublkdrv_ku_gate* ku_gate = kzalloc_node(sizeof(*ku_gate), GFP_KERNEL, ubd->nid);
         BUG_ON(!ku_gate);
 
         ku_gate->cmdb  = ubd->ctx->cmdb;
@@ -335,7 +335,7 @@ static int ublkdrv_uio_mmap(struct uio_info* info, struct vm_area_struct* vma)
         && !rcu_access_pointer(ubd->uk_gate)) {
         /* clang-format on */
 
-        struct ublkdrv_uk_gate* uk_gate = kzalloc(sizeof(*uk_gate), GFP_KERNEL);
+        struct ublkdrv_uk_gate* uk_gate = kzalloc_node(sizeof(*uk_gate), GFP_KERNEL, ubd->nid);
         BUG_ON(!uk_gate);
 
         uk_gate->cmdb_ack = ubd->ctx->cmdb_ack;
