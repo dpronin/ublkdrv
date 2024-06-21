@@ -188,7 +188,7 @@ static inline u32 ublkdrv_cell_gr_index_get(struct ublkdrv_cells_groups_ctx* ctx
     return ublkdrv_order_rounddown_and_clamp(pages_nr, 0, ARRAY_SIZE(ctx->cells_groups_state) - 1);
 }
 
-static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, struct ublkdrv_ku_gate* ku_gate, unsigned int bio_sz, struct ublkdrv_req* req)
+static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv_ctx* uctx, struct ublkdrv_ku_gate* ku_gate, unsigned int sz, struct ublkdrv_req* req)
 {
     int cell_gr_index;
 
@@ -199,7 +199,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
          .ncelld  = cellc->cellds_len,
     };
     int cells_nr                                      = 0;
-    unsigned int bio_len_pgs                          = DIV_ROUND_UP(bio_sz, PAGE_SIZE);
+    unsigned int pages_nr                             = DIV_ROUND_UP(sz, PAGE_SIZE);
     struct ublkdrv_cells_groups_ctx* cells_groups_ctx = uctx->cells_groups_ctx;
 
     spin_lock(&cells_groups_ctx->lock);
@@ -207,12 +207,12 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
     cell_gr_index = ARRAY_SIZE(cells_groups_ctx->cells_groups_state) - 1;
 
     for (struct ublkdrv_celld *prev_celld = &dummy_celld, *celld = NULL;
-         cells_nr <= U16_MAX && bio_len_pgs && bio_sz;
-         ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, bio_sz -= celld->data_sz, prev_celld = celld) {
+         cells_nr <= U16_MAX && pages_nr && sz;
+         ++cells_nr, celld->ncelld = uctx->cellc->cellds_len, sz -= celld->data_sz, prev_celld = celld) {
 
         u32 celldn;
 
-        u32 const cell_gr_index_min_required = ublkdrv_cell_gr_index_get(cells_groups_ctx, bio_len_pgs);
+        u32 const cell_gr_index_min_required = ublkdrv_cell_gr_index_get(cells_groups_ctx, pages_nr);
 
         cell_gr_index = min_t(int, cell_gr_index, cell_gr_index_min_required);
 
@@ -232,10 +232,10 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
 
         celld = &uctx->cellc->cellds[celldn];
 
-        celld->data_sz = min_t(u32, bio_sz, UBLKDRV_CELL_SZ_MIN << cell_gr_index);
+        celld->data_sz = min_t(u32, sz, UBLKDRV_CELL_SZ_MIN << cell_gr_index);
 
         prev_celld->ncelld = celldn;
-        bio_len_pgs -= 1u << cell_gr_index;
+        pages_nr -= 1u << cell_gr_index;
     }
 
     if (unlikely(!(cells_nr <= U16_MAX))) {
@@ -246,7 +246,7 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
 
     spin_unlock(&cells_groups_ctx->lock);
 
-    BUG_ON(bio_len_pgs || bio_sz);
+    BUG_ON(pages_nr || sz);
     BUG_ON(cells_nr && !(dummy_celld.ncelld < uctx->cellc->cellds_len));
 
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
@@ -265,20 +265,18 @@ static int ublkdrv_dev_req_cells_acquire(struct ublkdrv_dev* ubd, struct ublkdrv
     return 0;
 }
 
-static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req)
+static int ublkdrv_req_cells_acquire(struct ublkdrv_req* req, unsigned int sz)
 {
     struct ublkdrv_ku_gate* ku_gate;
     int rc;
 
-    struct bio const* bio   = req->bio;
     struct ublkdrv_dev* ubd = req->ubd;
     struct ublkdrv_ctx* ctx = ubd->ctx;
-    unsigned int bio_sz     = bio_sectors(bio) << SECTOR_SHIFT;
 
-    if (unlikely(!bio_sz))
+    if (unlikely(!sz))
         return 1;
 
-    BUG_ON(!(bio_sz <= ctx->params->max_req_sz));
+    BUG_ON(!(sz <= ctx->params->max_req_sz));
 
 retry:
     rcu_read_lock();
@@ -289,7 +287,7 @@ retry:
         return -ENOLINK;
     }
 
-    rc = ublkdrv_dev_req_cells_acquire(ubd, ctx, ku_gate, bio_sz, req);
+    rc = ublkdrv_dev_req_cells_acquire(ubd, ctx, ku_gate, sz, req);
 
     rcu_read_unlock();
 
@@ -301,17 +299,6 @@ retry:
         goto retry;
     }
 
-    switch (ublkdrv_cmd_get_op(&req->cmd)) {
-        case UBLKDRV_CMD_OP_READ:
-            ublkdrv_cmd_read_set_offset(&req->cmd.u.r, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            break;
-        case UBLKDRV_CMD_OP_WRITE:
-            ublkdrv_cmd_write_set_offset(&req->cmd.u.w, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-            break;
-        default:
-            BUG();
-    }
-
     return 0;
 }
 
@@ -321,6 +308,7 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
     struct workqueue_struct* nwq     = NULL;
 
     struct ublkdrv_req* req = container_of(work, struct ublkdrv_req, work);
+    struct bio* bio         = req->bio;
     struct ublkdrv_dev* ubd = req->ubd;
     int const op            = ublkdrv_bio_to_cmd_op(req->bio);
     if (op < 0) {
@@ -328,31 +316,39 @@ static void ublkdrv_req_submit_work_h(struct work_struct* work)
         return;
     }
 
+    int rc = 0;
+
     ublkdrv_cmd_set_op(&req->cmd, op);
 
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_WRITE:
+            ublkdrv_cmd_write_set_offset(&req->cmd.u.w, bio->bi_iter.bi_sector << SECTOR_SHIFT);
+            rc  = ublkdrv_req_cells_acquire(req, bio_sectors(bio) << SECTOR_SHIFT);
             nwh = ublkdrv_req_copy_work_h;
             nwq = ubd->wqs[UBLKDRV_COPY_WQ];
-            fallthrough;
-        case UBLKDRV_CMD_OP_READ: {
-            int const rc = ublkdrv_req_cells_acquire(req);
-            if (unlikely(rc)) {
-                ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
-                return;
-            }
-        } break;
+            break;
+        case UBLKDRV_CMD_OP_READ:
+            ublkdrv_cmd_read_set_offset(&req->cmd.u.r, bio->bi_iter.bi_sector << SECTOR_SHIFT);
+            rc = ublkdrv_req_cells_acquire(req, bio_sectors(bio) << SECTOR_SHIFT);
+            break;
         case UBLKDRV_CMD_OP_FLUSH:
             break;
         case UBLKDRV_CMD_OP_DISCARD:
-            ublkdrv_cmd_discard_set_sz(&req->cmd.u.d, bio_sectors(req->bio) << SECTOR_SHIFT);
+            ublkdrv_cmd_discard_set_offset(&req->cmd.u.d, bio->bi_iter.bi_sector << SECTOR_SHIFT);
+            ublkdrv_cmd_discard_set_sz(&req->cmd.u.d, bio_sectors(bio) << SECTOR_SHIFT);
             break;
         case UBLKDRV_CMD_OP_WRITE_ZEROES:
-            ublkdrv_cmd_write_zeros_set_sz(&req->cmd.u.wz, bio_sectors(req->bio) << SECTOR_SHIFT);
+            ublkdrv_cmd_write_zeros_set_offset(&req->cmd.u.wz, bio->bi_iter.bi_sector << SECTOR_SHIFT);
+            ublkdrv_cmd_write_zeros_set_sz(&req->cmd.u.wz, bio_sectors(bio) << SECTOR_SHIFT);
             break;
         default:
             ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
             return;
+    }
+
+    if (unlikely(rc)) {
+        ublkdrv_req_endio(req, rc < 0 ? errno_to_blk_status(rc) : BLK_STS_OK);
+        return;
     }
 
     nwh = nwh ?: ublkdrv_req_cfq_push_work_h;
