@@ -26,8 +26,8 @@ static inline bool ublkdrv_cfq_ack_pop(struct ublkdrv_cmd_ack const cmds[], u8 c
 
 static inline bool ublkdrv_cfq_push(struct ublkdrv_cmd cmds[], u8 cmds_len, u8 const* phead, u8* ptail, struct ublkdrv_cmd const* cmd_in)
 {
-    __u8 const ct  = *ptail;
-    __u8 const nct = (ct + 1) % cmds_len;
+    u8 const ct  = *ptail;
+    u8 const nct = (ct + 1) % cmds_len;
     if (likely(nct != READ_ONCE(*phead))) {
         BUG_ON(!(ct < cmds_len));
         cmds[ct] = *cmd_in;
