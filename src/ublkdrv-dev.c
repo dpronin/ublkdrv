@@ -81,7 +81,6 @@ retry:
     if (unlikely(!uctx)) {
         __ublkdrv_req_cells_free(req, kctx);
         rcu_read_unlock();
-        idr_preload_end();
         ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
         return;
     }
