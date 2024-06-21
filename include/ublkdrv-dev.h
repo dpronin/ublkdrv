@@ -5,16 +5,17 @@
 #include <linux/compiler_types.h>
 #include <linux/kref.h>
 #include <linux/rcupdate.h>
+#include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
 #include "ublkdrv-ctx.h"
 #include "ublkdrv-ku-gate.h"
 #include "ublkdrv-mapping.h"
-#include "ublkdrv-req.h"
 #include "ublkdrv-uk-gate.h"
 
 struct ublkdrv_uio;
+struct ublkdrv_req;
 
 enum {
     UBLKDRV_FIN_WQ,
@@ -39,6 +40,7 @@ struct ublkdrv_dev {
     char name[16];
     struct kref ref;
     struct rcu_head rcu;
+    struct kmem_cache* req_kc;
     struct ublkdrv_dev_ops const* ops;
     struct ublkdrv_ctx* ctx;
     struct ublkdrv_ku_gate __rcu* ku_gate;

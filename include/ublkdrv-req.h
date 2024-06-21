@@ -12,6 +12,7 @@
 #include "uapi/ublkdrv/cmd.h"
 
 #include "ublkdrv-ctx.h"
+#include "ublkdrv-dev.h"
 
 struct ublkdrv_dev;
 
@@ -43,9 +44,12 @@ static inline void ublkdrv_req_cells_free(struct ublkdrv_req const* req, struct 
 
 static inline void ublkdrv_req_endio(struct ublkdrv_req* req, blk_status_t bi_status)
 {
-    struct bio* bio = req->bio;
-    bio->bi_status  = bi_status;
-    kfree(req);
+    struct bio* bio         = req->bio;
+    struct ublkdrv_dev* ubd = req->ubd;
+
+    bio->bi_status = bi_status;
+    kmem_cache_free(ubd->req_kc, req);
+
     bio_endio(bio);
 }
 

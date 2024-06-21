@@ -27,7 +27,6 @@
 #include "ublkdrv-priv.h"
 #include "ublkdrv-req.h"
 #include "ublkdrv-uio.h"
-#include "ublkdrv-uk-gate.h"
 
 static inline int ublkdrv_bio_to_cmd_op(struct bio const* bio)
 {

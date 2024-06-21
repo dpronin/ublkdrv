@@ -94,7 +94,7 @@ static void ublkdrv_submit_bio_fit(struct bio* bio, unsigned long start_j, struc
 {
     struct ublkdrv_req* req;
 
-    req = kzalloc_node(sizeof(*req), GFP_KERNEL, ubd->nid);
+    req = kmem_cache_alloc_node(ubd->req_kc, GFP_KERNEL | __GFP_ZERO, ubd->nid);
     if (unlikely(!req)) {
         bio->bi_status = BLK_STS_RESOURCE;
         bio_endio(bio);
@@ -378,7 +378,9 @@ static void ublkdrv_dev_free(struct ublkdrv_dev* ubd)
         kfree_const(uio->name);
         kfree(uio);
     }
+
     ublkdrv_ctx_deinit(ubd->ctx);
+    kmem_cache_destroy(ubd->req_kc);
     kfree(ubd->ctx);
     kfree(ubd);
 }
@@ -422,10 +424,16 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
 
     ubd->nid = nid;
 
+    ubd->req_kc = kmem_cache_create("ublkdrv-req", sizeof(struct ublkdrv_req), 0, 0, NULL);
+    if (!ubd->req_kc) {
+        pr_err("unable to create kmem cache for the requests, out of memory.\n");
+        goto free_ubd;
+    }
+
     ubd->ctx = kzalloc_node(sizeof(*ubd->ctx), GFP_KERNEL, ubd->nid);
     if (!ubd->ctx) {
         pr_err("unable to allocate device context, out of memory.\n");
-        goto free_ubd;
+        goto destroy_req_kc;
     }
 
     r = ublkdrv_ctx_init(ubd->ctx, ubd->nid);
@@ -539,6 +547,9 @@ deinit_ctx:
 
 free_ctx:
     kfree(ubd->ctx);
+
+destroy_req_kc:
+    kmem_cache_destroy(ubd->req_kc);
 
 free_ubd:
     kfree(ubd);
