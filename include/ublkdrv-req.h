@@ -27,14 +27,14 @@ struct ublkdrv_req {
 void ublkdrv_req_from_bio_to_cells_copy(struct ublkdrv_cellc const* cellc, void* cells, struct bio const* bio, u32 celldn);
 void ublkdrv_req_from_cells_to_bio_copy(struct ublkdrv_cellc const* cellc, struct bio* bio, void const* cells, u32 celldn);
 
-static inline void ublkdrv_req_cells_free(struct ublkdrv_req const* req, struct ublkdrv_ctx* kctx)
+static inline void ublkdrv_req_cells_free(struct ublkdrv_req const* req, struct ublkdrv_ctx* ctx)
 {
     switch (ublkdrv_cmd_get_op(&req->cmd)) {
         case UBLKDRV_CMD_OP_READ:
-            ublkdrv_sema_cells_free(kctx, ublkdrv_cmd_read_get_fcdn(&req->cmd.u.r), ublkdrv_cmd_read_get_cds_nr(&req->cmd.u.r));
+            ublkdrv_sema_cells_free(ctx, ublkdrv_cmd_read_get_fcdn(&req->cmd.u.r), ublkdrv_cmd_read_get_cds_nr(&req->cmd.u.r));
             break;
         case UBLKDRV_CMD_OP_WRITE:
-            ublkdrv_sema_cells_free(kctx, ublkdrv_cmd_write_get_fcdn(&req->cmd.u.w), ublkdrv_cmd_write_get_cds_nr(&req->cmd.u.w));
+            ublkdrv_sema_cells_free(ctx, ublkdrv_cmd_write_get_fcdn(&req->cmd.u.w), ublkdrv_cmd_write_get_cds_nr(&req->cmd.u.w));
             break;
         default:
             break;

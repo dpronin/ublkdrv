@@ -9,8 +9,10 @@
 #include <linux/workqueue.h>
 
 #include "ublkdrv-ctx.h"
+#include "ublkdrv-ku-gate.h"
 #include "ublkdrv-mapping.h"
 #include "ublkdrv-req.h"
+#include "ublkdrv-uk-gate.h"
 
 struct ublkdrv_uio;
 
@@ -38,8 +40,9 @@ struct ublkdrv_dev {
     struct kref ref;
     struct rcu_head rcu;
     struct ublkdrv_dev_ops const* ops;
-    struct ublkdrv_ctx* kctx;
-    struct ublkdrv_ctx __rcu* uctx;
+    struct ublkdrv_ctx* ctx;
+    struct ublkdrv_ku_gate __rcu* ku_gate;
+    struct ublkdrv_uk_gate __rcu* uk_gate;
     struct gendisk* disk;
     struct ublkdrv_uio* uios[UBLKDRV_UIO_DIRS_QTY];
     struct workqueue_struct* wqs[UBLKDRV_WQS_QTY];

@@ -31,9 +31,11 @@
 
 #include "ublkdrv-cfq.h"
 #include "ublkdrv-dev.h"
+#include "ublkdrv-ku-gate.h"
 #include "ublkdrv-mapping.h"
 #include "ublkdrv-priv.h"
 #include "ublkdrv-req.h"
+#include "ublkdrv-uk-gate.h"
 
 static void ublkdrv_uio_vma_open(struct vm_area_struct* vma);
 static void ublkdrv_uio_vma_close(struct vm_area_struct* vma);
@@ -68,27 +70,27 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
 {
     struct ublkdrv_cmd_complete_work* ccw = container_of(work, struct ublkdrv_cmd_complete_work, work);
     struct ublkdrv_dev* ubd               = ccw->ubd;
+    struct ublkdrv_ctx* ctx               = ubd->ctx;
 
     for (u32 cmds = ccw->cmds; cmds--;) {
-        struct ublkdrv_ctx* uctx;
         struct ublkdrv_cmdb_ack* cmdb_ack;
         struct ublkdrv_cellc* cellc;
         struct ublkdrv_cmd_ack cmd_ack;
-        u8 cmd_id;
-
         struct ublkdrv_req* req;
+        struct ublkdrv_uk_gate* uk_gate;
+        u8 cmd_id;
 
     retry:
         rcu_read_lock();
 
-        uctx = rcu_dereference(ubd->uctx);
-        if (unlikely(!uctx)) {
+        uk_gate = rcu_dereference(ubd->uk_gate);
+        if (unlikely(!uk_gate)) {
             rcu_read_unlock();
             break;
         }
 
-        cmdb_ack = uctx->cmdb_ack;
-        cellc    = uctx->cellc;
+        cmdb_ack = uk_gate->cmdb_ack;
+        cellc    = uk_gate->cellc;
 
         if (unlikely(!ublkdrv_cfq_ack_pop(cmdb_ack->cmds, cmdb_ack->cmds_len, &cellc->cmdb_ack_head, &cmdb_ack->tail, &cmd_ack))) {
             rcu_read_unlock();
@@ -99,15 +101,15 @@ ublkdrv_cfq_pop_work_h(struct work_struct* work)
         req    = NULL;
         cmd_id = ublkdrv_cmd_ack_get_id(&cmd_ack);
 
-        spin_lock(&uctx->ku_state_ctx->lock);
+        spin_lock(&ctx->ku_state_ctx->lock);
 
-        if (likely(0 == dynamic_bitmap_semaphore_post(uctx->ku_state_ctx->cmds_ids, cmd_id))) {
-            BUG_ON(!uctx->ku_state_ctx->reqs_pending[cmd_id]);
-            req                                      = uctx->ku_state_ctx->reqs_pending[cmd_id];
-            uctx->ku_state_ctx->reqs_pending[cmd_id] = NULL;
+        if (likely(0 == dynamic_bitmap_semaphore_post(ctx->ku_state_ctx->cmds_ids, cmd_id))) {
+            BUG_ON(!ctx->ku_state_ctx->reqs_pending[cmd_id]);
+            req                                     = ctx->ku_state_ctx->reqs_pending[cmd_id];
+            ctx->ku_state_ctx->reqs_pending[cmd_id] = NULL;
         }
 
-        spin_unlock(&uctx->ku_state_ctx->lock);
+        spin_unlock(&ctx->ku_state_ctx->lock);
 
         rcu_read_unlock();
 
@@ -133,7 +135,7 @@ static int ublkdrv_uio_irq_cmd_handled(struct uio_info* info, s32 irq_on)
 {
     struct ublkdrv_uio* uio     = info->priv;
     struct ublkdrv_dev* ubd     = uio->priv;
-    struct ublkdrv_ctx* ctx     = ubd->kctx;
+    struct ublkdrv_ctx* ctx     = ubd->ctx;
     struct ublkdrv_cellc* cellc = ctx->cellc;
     struct ublkdrv_cmdb* cmdb   = ctx->cmdb;
 
@@ -194,40 +196,47 @@ static void ublkdrv_uio_vma_close(struct vm_area_struct* vma)
 
         u32 celldn;
         int i;
+        struct ublkdrv_ku_gate* ku_gate;
+        struct ublkdrv_uk_gate* uk_gate;
 
-        struct ublkdrv_ctx* kctx = ubd->kctx;
+        struct ublkdrv_ctx* ctx = ubd->ctx;
 
-        rcu_assign_pointer(ubd->uctx, NULL);
-
+        ku_gate = rcu_replace_pointer(ubd->ku_gate, NULL, true);
         synchronize_rcu();
-
+        kfree(ku_gate);
         flush_workqueue(ubd->wqs[UBLKDRV_CFQ_PUSH_WQ]);
+
+        ctx->cmdb->tail = 0;
+        memset(ctx->cmdb->cmds, 0, sizeof(ctx->cmdb->cmds[0]) * ctx->cmdb->cmds_len);
+        ctx->cellc->cmdb_head = 0;
+
+        uk_gate = rcu_replace_pointer(ubd->uk_gate, NULL, true);
+        synchronize_rcu();
+        kfree(uk_gate);
         flush_workqueue(ubd->wqs[UBLKDRV_CFQ_POP_WQ]);
 
-        for (i = 0; i < kctx->cmdb->cmds_len - 1; ++i) {
-            struct ublkdrv_req* req = kctx->ku_state_ctx->reqs_pending[i];
+        ctx->cmdb_ack->tail = 0;
+        memset(ctx->cmdb_ack->cmds, 0, sizeof(ctx->cmdb_ack->cmds[0]) * ctx->cmdb_ack->cmds_len);
+        ctx->cellc->cmdb_ack_head = 0;
+
+        for (i = 0; i < ctx->cmdb->cmds_len - 1; ++i) {
+            struct ublkdrv_req* req = ctx->ku_state_ctx->reqs_pending[i];
             if (req) {
-                BUG_ON(dynamic_bitmap_semaphore_post(kctx->ku_state_ctx->cmds_ids, i));
-                kctx->ku_state_ctx->reqs_pending[i] = NULL;
-                req->err                            = -ENOLINK;
-                ublkdrv_req_cells_free(req, kctx);
+                BUG_ON(dynamic_bitmap_semaphore_post(ctx->ku_state_ctx->cmds_ids, i));
+                ctx->ku_state_ctx->reqs_pending[i] = NULL;
+                req->err                           = -ENOLINK;
+                ublkdrv_req_cells_free(req, ctx);
                 ublkdrv_req_endio(req, BLK_STS_TRANSPORT);
             }
         }
 
-        kctx->cmdb->tail = 0;
-        memset(kctx->cmdb->cmds, 0, sizeof(kctx->cmdb->cmds[0]) * kctx->cmdb->cmds_len);
-        kctx->cellc->cmdb_head     = 0;
-        kctx->cellc->cmdb_ack_head = 0;
-        for (celldn = 0; celldn < kctx->cellc->cellds_len; ++celldn) {
-            struct ublkdrv_celld* celld = &kctx->cellc->cellds[celldn];
+        for (celldn = 0; celldn < ctx->cellc->cellds_len; ++celldn) {
+            struct ublkdrv_celld* celld = &ctx->cellc->cellds[celldn];
 
             celld->data_sz = 0;
-            celld->ncelld  = kctx->cellc->cellds_len;
+            celld->ncelld  = ctx->cellc->cellds_len;
         }
-        memset(kctx->cells, 0, kctx->cells_sz);
-        kctx->cmdb_ack->tail = 0;
-        memset(kctx->cmdb_ack->cmds, 0, sizeof(kctx->cmdb_ack->cmds[0]) * kctx->cmdb_ack->cmds_len);
+        memset(ctx->cells, 0, ctx->cells_sz);
     }
 
     ubd->ops->release(ubd);
@@ -304,8 +313,35 @@ static int ublkdrv_uio_mmap(struct uio_info* info, struct vm_area_struct* vma)
 
     ublkdrv_uio_vma_open(vma);
 
-    if (uio == ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER] && UBLKDRV_UIO_MEM_CMDB == mem_id) {
-        rcu_assign_pointer(ubd->uctx, ubd->kctx);
+    /* clang-format off */
+    if (uio == ubd->uios[UBLKDRV_UIO_DIR_KERNEL_TO_USER]
+        && UBLKDRV_UIO_MEM_CMDB == mem_id
+        && !rcu_access_pointer(ubd->ku_gate)) {
+        /* clang-format on */
+
+        struct ublkdrv_ku_gate* ku_gate = kzalloc(sizeof(*ku_gate), GFP_KERNEL);
+        BUG_ON(!ku_gate);
+
+        ku_gate->cmdb  = ubd->ctx->cmdb;
+        ku_gate->cellc = ubd->ctx->cellc;
+
+        rcu_assign_pointer(ubd->ku_gate, ku_gate);
+        synchronize_rcu();
+    }
+
+    /* clang-format off */
+    if (uio == ubd->uios[UBLKDRV_UIO_DIR_USER_TO_KERNEL]
+        && UBLKDRV_UIO_MEM_CMDB == mem_id
+        && !rcu_access_pointer(ubd->uk_gate)) {
+        /* clang-format on */
+
+        struct ublkdrv_uk_gate* uk_gate = kzalloc(sizeof(*uk_gate), GFP_KERNEL);
+        BUG_ON(!uk_gate);
+
+        uk_gate->cmdb_ack = ubd->ctx->cmdb_ack;
+        uk_gate->cellc    = ubd->ctx->cellc;
+
+        rcu_assign_pointer(ubd->uk_gate, uk_gate);
         synchronize_rcu();
     }
 
@@ -324,18 +360,18 @@ static int ublkdrv_uio_kern_to_user_register(struct ublkdrv_dev* ubd, struct ubl
     info->version = "7.0.0";
 
     info->mem[UBLKDRV_UIO_MEM_CMDB].name    = UBLKDRV_UIO_MEM_CMDB_NAME;
-    info->mem[UBLKDRV_UIO_MEM_CMDB].addr    = (phys_addr_t)ubd->kctx->cmdb;
-    info->mem[UBLKDRV_UIO_MEM_CMDB].size    = ubd->kctx->cmdb_sz;
+    info->mem[UBLKDRV_UIO_MEM_CMDB].addr    = (phys_addr_t)ubd->ctx->cmdb;
+    info->mem[UBLKDRV_UIO_MEM_CMDB].size    = ubd->ctx->cmdb_sz;
     info->mem[UBLKDRV_UIO_MEM_CMDB].memtype = UIO_MEM_LOGICAL;
 
     info->mem[UBLKDRV_UIO_MEM_CELLC].name    = UBLKDRV_UIO_MEM_CELLC_NAME;
-    info->mem[UBLKDRV_UIO_MEM_CELLC].addr    = (phys_addr_t)ubd->kctx->cellc;
-    info->mem[UBLKDRV_UIO_MEM_CELLC].size    = ubd->kctx->cellc_sz;
+    info->mem[UBLKDRV_UIO_MEM_CELLC].addr    = (phys_addr_t)ubd->ctx->cellc;
+    info->mem[UBLKDRV_UIO_MEM_CELLC].size    = ubd->ctx->cellc_sz;
     info->mem[UBLKDRV_UIO_MEM_CELLC].memtype = UIO_MEM_LOGICAL;
 
     info->mem[UBLKDRV_UIO_MEM_CELLS].name    = UBLKDRV_UIO_MEM_CELLS_NAME;
-    info->mem[UBLKDRV_UIO_MEM_CELLS].addr    = (phys_addr_t)ubd->kctx->cells;
-    info->mem[UBLKDRV_UIO_MEM_CELLS].size    = ubd->kctx->cells_sz;
+    info->mem[UBLKDRV_UIO_MEM_CELLS].addr    = (phys_addr_t)ubd->ctx->cells;
+    info->mem[UBLKDRV_UIO_MEM_CELLS].size    = ubd->ctx->cells_sz;
     info->mem[UBLKDRV_UIO_MEM_CELLS].memtype = UIO_MEM_VIRTUAL;
 
     uio->mems_len = UBLKDRV_UIO_MEM_CELLS + 1;
@@ -381,8 +417,8 @@ static int ublkdrv_uio_user_to_kernel_register(struct ublkdrv_dev* ubd, struct u
     info->version = "3.0.0";
 
     info->mem[UBLKDRV_UIO_MEM_CMDB].name    = UBLKDRV_UIO_MEM_CMDB_NAME;
-    info->mem[UBLKDRV_UIO_MEM_CMDB].addr    = (phys_addr_t)ubd->kctx->cmdb_ack;
-    info->mem[UBLKDRV_UIO_MEM_CMDB].size    = ubd->kctx->cmdb_ack_sz;
+    info->mem[UBLKDRV_UIO_MEM_CMDB].addr    = (phys_addr_t)ubd->ctx->cmdb_ack;
+    info->mem[UBLKDRV_UIO_MEM_CMDB].size    = ubd->ctx->cmdb_ack_sz;
     info->mem[UBLKDRV_UIO_MEM_CMDB].memtype = UIO_MEM_LOGICAL;
 
     uio->mems_len = UBLKDRV_UIO_MEM_CMDB + 1;

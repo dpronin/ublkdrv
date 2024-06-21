@@ -116,8 +116,8 @@ static void ublkdrv_submit_bio(struct bio* bio)
     struct ublkdrv_dev* ubd     = gd->private_data;
     unsigned long const start_j = blk_queue_io_stat(gd->queue) ? bio_start_io_acct(bio) : 0;
 
-    while ((bio_sectors(bio) << SECTOR_SHIFT) > ubd->kctx->params->max_req_sz) {
-        struct bio* new_bio = bio_split(bio, ubd->kctx->params->max_req_sz >> SECTOR_SHIFT, GFP_NOIO, &fs_bio_set);
+    while ((bio_sectors(bio) << SECTOR_SHIFT) > ubd->ctx->params->max_req_sz) {
+        struct bio* new_bio = bio_split(bio, ubd->ctx->params->max_req_sz >> SECTOR_SHIFT, GFP_NOIO, &fs_bio_set);
         bio_chain(new_bio, bio);
         ublkdrv_submit_bio_fit(new_bio, start_j, ubd);
     }
@@ -378,8 +378,8 @@ static void ublkdrv_dev_free(struct ublkdrv_dev* ubd)
         kfree_const(uio->name);
         kfree(uio);
     }
-    ublkdrv_ctx_deinit(ubd->kctx);
-    kfree(ubd->kctx);
+    ublkdrv_ctx_deinit(ubd->ctx);
+    kfree(ubd->ctx);
     kfree(ubd);
 }
 
@@ -422,19 +422,20 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
 
     ubd->nid = nid;
 
-    ubd->kctx = kzalloc_node(sizeof(*ubd->kctx), GFP_KERNEL, ubd->nid);
-    if (!ubd->kctx) {
+    ubd->ctx = kzalloc_node(sizeof(*ubd->ctx), GFP_KERNEL, ubd->nid);
+    if (!ubd->ctx) {
         pr_err("unable to allocate device context, out of memory.\n");
         goto free_ubd;
     }
 
-    r = ublkdrv_ctx_init(ubd->kctx, ubd->nid);
+    r = ublkdrv_ctx_init(ubd->ctx, ubd->nid);
     if (r) {
         pr_err("unable to initialize device context, err %i\n", r);
         goto free_ctx;
     }
 
-    rcu_assign_pointer(ubd->uctx, NULL);
+    rcu_assign_pointer(ubd->ku_gate, NULL);
+    rcu_assign_pointer(ubd->uk_gate, NULL);
 
     r = id = ublkdrv_dev_id_alloc();
     if (r < 0) {
@@ -461,10 +462,10 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
     set_disk_ro(gd, read_only);
     set_capacity(gd, capacity_sectors);
 
-    blk_queue_max_hw_sectors(gd->queue, ubd->kctx->cells_sz >> SECTOR_SHIFT);
-    blk_queue_chunk_sectors(gd->queue, ubd->kctx->cells_sz >> SECTOR_SHIFT);
-    blk_queue_io_opt(gd->queue, ubd->kctx->cells_sz);
-    blk_set_queue_depth(gd->queue, ubd->kctx->cmdb->cmds_len - 1);
+    blk_queue_max_hw_sectors(gd->queue, ubd->ctx->cells_sz >> SECTOR_SHIFT);
+    blk_queue_chunk_sectors(gd->queue, ubd->ctx->cells_sz >> SECTOR_SHIFT);
+    blk_queue_io_opt(gd->queue, ubd->ctx->cells_sz);
+    blk_set_queue_depth(gd->queue, ubd->ctx->cmdb->cmds_len - 1);
     blk_queue_write_cache(gd->queue, true, false);
 
     blk_queue_flag_set(QUEUE_FLAG_IO_STAT, gd->queue);
@@ -534,10 +535,10 @@ free_id:
     ublkdrv_dev_id_free(id);
 
 deinit_ctx:
-    ublkdrv_ctx_deinit(ubd->kctx);
+    ublkdrv_ctx_deinit(ubd->ctx);
 
 free_ctx:
-    kfree(ubd->kctx);
+    kfree(ubd->ctx);
 
 free_ubd:
     kfree(ubd);
