@@ -480,25 +480,25 @@ struct ublkdrv_dev* ublkdrv_dev_create(char const* disk_name, u64 capacity_secto
 
     format_dev_t(ubd->name, MKDEV(major, gd->first_minor));
 
-    ubd->wqs[UBLKDRV_FIN_WQ] = alloc_workqueue("kreqfin/%s", WQ_MEM_RECLAIM, 1, gd->disk_name);
+    ubd->wqs[UBLKDRV_FIN_WQ] = alloc_workqueue("kreqack/%s", WQ_MEM_RECLAIM, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_FIN_WQ]) {
         pr_err("unable to allocate a workqueue for requests finishing, out of memory\n");
         goto destroy_wqs;
     }
 
-    ubd->wqs[UBLKDRV_COPY_WQ] = alloc_workqueue("kcpy/%s", WQ_UNBOUND, 0, gd->disk_name);
+    ubd->wqs[UBLKDRV_COPY_WQ] = alloc_workqueue("kmemcpy/%s", WQ_UNBOUND, 0, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_COPY_WQ]) {
         pr_err("unable to allocate a workqueue for copying data, out of memory\n");
         goto destroy_wqs;
     }
 
-    ubd->wqs[UBLKDRV_CFQ_POP_WQ] = alloc_workqueue("kcmdcomp/%s", WQ_UNBOUND, 1, gd->disk_name);
+    ubd->wqs[UBLKDRV_CFQ_POP_WQ] = alloc_workqueue("kcmdack/%s", WQ_UNBOUND, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_CFQ_POP_WQ]) {
         pr_err("unable to allocate a workqueue for cfq commands popping, out of memory\n");
         goto destroy_wqs;
     }
 
-    ubd->wqs[UBLKDRV_CFQ_PUSH_WQ] = alloc_workqueue("kcfqpush/%s", WQ_UNBOUND, 1, gd->disk_name);
+    ubd->wqs[UBLKDRV_CFQ_PUSH_WQ] = alloc_workqueue("kcmdsubm/%s", WQ_UNBOUND, 1, gd->disk_name);
     if (!ubd->wqs[UBLKDRV_CFQ_PUSH_WQ]) {
         pr_err("unable to allocate a workqueue for cfq commands pushing, out of memory\n");
         goto put_disk;
