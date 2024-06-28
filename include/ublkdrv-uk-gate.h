@@ -5,8 +5,8 @@
 #include "uapi/ublkdrv/cmdb_ack.h"
 
 struct ublkdrv_uk_gate {
-    struct ublkdrv_cellc* cellc;
-    struct ublkdrv_cmdb_ack* cmdb_ack;
+	struct ublkdrv_cellc *cellc;
+	struct ublkdrv_cmdb_ack *cmdb_ack;
 };
 
 #endif /* UBLKDRV_UK_GATE_H */
