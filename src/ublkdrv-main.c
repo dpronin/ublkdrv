@@ -44,18 +44,15 @@
 #include "ublkdrv-genl.h"
 #include "ublkdrv-req.h"
 #include "ublkdrv-uio.h"
+#include "ublkdrv-priv.h"
 #include "ublkdrv.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pronin Denis <dannftk@yandex.ru>");
-MODULE_DESCRIPTION("UBLKDRV");
+MODULE_DESCRIPTION(
+	"UBLK driver for creating block devices that map on UBLK userspace application targets");
 MODULE_INFO(supported, "external");
 MODULE_VERSION("1.2.7");
-// MODULE_VERSION(__stringify(VERSION));
-
-#define KiB_SHIFT 10
-#define MiB_SHIFT 20
-#define GiB_SHIFT 30
 
 static int major;
 
@@ -119,7 +116,7 @@ static void ublkdrv_submit_bio(struct bio *bio)
 	unsigned long const start_j =
 		blk_queue_io_stat(gd->queue) ? bio_start_io_acct(bio) : 0;
 
-	while ((bio_sectors(bio) << SECTOR_SHIFT) >
+	while (ublkdrv_sectors_to_bytes(bio_sectors(bio)) >
 	       ubd->ctx->params->max_req_sz) {
 		struct bio *new_bio = bio_split(
 			bio, ubd->ctx->params->max_req_sz >> SECTOR_SHIFT,

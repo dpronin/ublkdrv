@@ -342,34 +342,40 @@ static void ublkdrv_req_submit_work_h(struct work_struct *work)
 
 	ublkdrv_cmd_set_op(&req->cmd, op);
 
-	switch (ublkdrv_cmd_get_op(&req->cmd)) {
+	switch (op) {
 	case UBLKDRV_CMD_OP_WRITE:
 		ublkdrv_cmd_write_set_offset(
-			&req->cmd.u.w, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-		rc = ublkdrv_req_cells_acquire(req, bio_sectors(bio)
-							    << SECTOR_SHIFT);
+			&req->cmd.u.w,
+			ublkdrv_sectors_to_bytes(bio->bi_iter.bi_sector));
+		rc = ublkdrv_req_cells_acquire(
+			req, ublkdrv_sectors_to_bytes(bio_sectors(bio)));
 		nwh = ublkdrv_req_copy_work_h;
 		nwq = ubd->wqs[UBLKDRV_COPY_WQ];
 		break;
 	case UBLKDRV_CMD_OP_READ:
 		ublkdrv_cmd_read_set_offset(
-			&req->cmd.u.r, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-		rc = ublkdrv_req_cells_acquire(req, bio_sectors(bio)
-							    << SECTOR_SHIFT);
+			&req->cmd.u.r,
+			ublkdrv_sectors_to_bytes(bio->bi_iter.bi_sector));
+		rc = ublkdrv_req_cells_acquire(
+			req, ublkdrv_sectors_to_bytes(bio_sectors(bio)));
 		break;
 	case UBLKDRV_CMD_OP_FLUSH:
 		break;
 	case UBLKDRV_CMD_OP_DISCARD:
 		ublkdrv_cmd_discard_set_offset(
-			&req->cmd.u.d, bio->bi_iter.bi_sector << SECTOR_SHIFT);
-		ublkdrv_cmd_discard_set_sz(&req->cmd.u.d,
-					   bio_sectors(bio) << SECTOR_SHIFT);
+			&req->cmd.u.d,
+			ublkdrv_sectors_to_bytes(bio->bi_iter.bi_sector));
+		ublkdrv_cmd_discard_set_sz(
+			&req->cmd.u.d,
+			ublkdrv_sectors_to_bytes(bio_sectors(bio)));
 		break;
 	case UBLKDRV_CMD_OP_WRITE_ZEROES:
 		ublkdrv_cmd_write_zeros_set_offset(
-			&req->cmd.u.wz, bio->bi_iter.bi_sector << SECTOR_SHIFT);
+			&req->cmd.u.wz,
+			ublkdrv_sectors_to_bytes(bio->bi_iter.bi_sector));
 		ublkdrv_cmd_write_zeros_set_sz(
-			&req->cmd.u.wz, bio_sectors(bio) << SECTOR_SHIFT);
+			&req->cmd.u.wz,
+			ublkdrv_sectors_to_bytes(bio_sectors(bio)));
 		break;
 	default:
 		ublkdrv_req_endio(req, BLK_STS_NOTSUPP);
