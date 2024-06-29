@@ -18,9 +18,8 @@ static inline int
 dynamic_bitmap_semaphore_init(struct dynamic_bitmap_semaphore *dbsem,
 			      unsigned int bits, int nid)
 {
-	unsigned int const len = BITS_TO_LONGS(bits);
-
-	dbsem->map = kcalloc_node(len, sizeof(dbsem->map[0]), GFP_KERNEL, nid);
+	dbsem->map = kcalloc_node(BITS_TO_LONGS(bits), sizeof(dbsem->map[0]),
+				  GFP_KERNEL, nid);
 	if (!dbsem->map)
 		return -ENOMEM;
 
