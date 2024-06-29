@@ -539,7 +539,7 @@ struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 	}
 
 	ubd->wqs[UBLKDRV_SUBM_WQ] =
-		alloc_workqueue("kreqsubm/%s", 0, 1, gd->disk_name);
+		alloc_workqueue("kreqsubm/%s", WQ_UNBOUND, 1, gd->disk_name);
 	if (!ubd->wqs[UBLKDRV_SUBM_WQ]) {
 		pr_err("unable to allocate a workqueue for requests submission, out of memory\n");
 		goto destroy_wqs;
