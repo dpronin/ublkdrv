@@ -7,7 +7,7 @@
 
 struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 				       u64 capacity_sectors, bool read_only,
-				       int nid);
+				       bool zero_copy, int nid);
 void ublkdrv_dev_destroy(struct ublkdrv_dev *ubd);
 
 #endif /* UBLKDRV_H */

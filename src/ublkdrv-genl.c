@@ -28,6 +28,7 @@ static const struct nla_policy nl_policy[UBLKDRV_GENL_BDEV_ATTRS_QTY] = {
 	[UBLKDRV_GENL_BDEV_ATTR_NODE] = { .type = NLA_U32 },
 	[UBLKDRV_GENL_BDEV_ATTR_CAPACITY_SECTORS] = { .type = NLA_U64 },
 	[UBLKDRV_GENL_BDEV_ATTR_READ_ONLY] = { .type = NLA_FLAG },
+	[UBLKDRV_GENL_BDEV_ATTR_ZERO_COPY] = { .type = NLA_FLAG },
 };
 
 static int ublkdrv_genl_bdev_cmd_create(struct sk_buff *skb,
@@ -68,6 +69,7 @@ static int ublkdrv_genl_bdev_cmd_create(struct sk_buff *skb,
 	char disk_name[DISK_NAME_LEN] = UBLKDRV_PREFIX;
 	int nid = numa_mem_id();
 	bool read_only = false;
+	bool zero_copy = false;
 	u64 capacity;
 
 	if (!(devs_nr < UBLKDRV_DEVICES_MAX))
@@ -86,14 +88,18 @@ static int ublkdrv_genl_bdev_cmd_create(struct sk_buff *skb,
 		read_only = nla_get_flag(
 			info->attrs[UBLKDRV_GENL_BDEV_ATTR_READ_ONLY]);
 
+	if (info->attrs[UBLKDRV_GENL_BDEV_ATTR_ZERO_COPY])
+		zero_copy = nla_get_flag(
+			info->attrs[UBLKDRV_GENL_BDEV_ATTR_ZERO_COPY]);
+
 	nla_strscpy(disk_name + strlen(UBLKDRV_PREFIX),
 		    info->attrs[UBLKDRV_GENL_BDEV_ATTR_NAME_SUFFIX],
 		    DISK_NAME_LEN - strlen(UBLKDRV_PREFIX));
 	capacity = nla_get_u64(
 		info->attrs[UBLKDRV_GENL_BDEV_ATTR_CAPACITY_SECTORS]);
 
-	devices[devs_nr] =
-		ublkdrv_dev_create(disk_name, capacity, read_only, nid);
+	devices[devs_nr] = ublkdrv_dev_create(disk_name, capacity, read_only,
+					      zero_copy, nid);
 	if (IS_ERR_OR_NULL(devices[devs_nr]))
 		return devices[devs_nr] ? PTR_ERR(devices[devs_nr]) : -ENOMEM;
 

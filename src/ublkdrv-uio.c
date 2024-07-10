@@ -122,7 +122,7 @@ retry:
 			struct workqueue_struct *nwq;
 
 			req->err = -(int)ublkdrv_cmd_ack_get_err(&cmd_ack);
-			if (!req->err &&
+			if (!ubd->zero_copy && !req->err &&
 			    UBLKDRV_CMD_OP_READ ==
 				    ublkdrv_cmd_get_op(&req->cmd)) {
 				nwh = ublkdrv_req_copy_work_h;

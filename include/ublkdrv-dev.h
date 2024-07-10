@@ -48,6 +48,7 @@ struct ublkdrv_dev {
 	struct gendisk *disk;
 	struct ublkdrv_uio *uios[UBLKDRV_UIO_DIRS_QTY];
 	struct workqueue_struct *wqs[UBLKDRV_WQS_QTY];
+	bool zero_copy;
 };
 
 void ublkdrv_dev_submit(struct ublkdrv_req *req);

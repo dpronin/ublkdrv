@@ -418,7 +418,17 @@ static void __ublkdrv_dev_release_rcu(struct rcu_head *rcu)
 
 static void __ublkdrv_dev_release(struct kref *ref)
 {
+	int i;
+
 	struct ublkdrv_dev *ubd = container_of(ref, struct ublkdrv_dev, ref);
+
+	for (i = ARRAY_SIZE(ubd->wqs) - 1; !(i < 0); --i) {
+		if (ubd->wqs[i]) {
+			destroy_workqueue(ubd->wqs[i]);
+			ubd->wqs[i] = NULL;
+		}
+	}
+
 	call_rcu(&ubd->rcu, __ublkdrv_dev_release_rcu);
 }
 
@@ -429,7 +439,7 @@ static void ublkdrv_dev_release(struct ublkdrv_dev *ubd)
 
 struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 				       u64 capacity_sectors, bool read_only,
-				       int nid)
+				       bool zero_copy, int nid)
 {
 	int r, id;
 	struct ublkdrv_dev *ubd;
@@ -449,6 +459,7 @@ struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 	}
 
 	ubd->nid = nid;
+	ubd->zero_copy = zero_copy;
 
 	ubd->req_kc = kmem_cache_create("ublkdrv-req",
 					sizeof(struct ublkdrv_req), 0, 0, NULL);
@@ -514,11 +525,13 @@ struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 		goto destroy_wqs;
 	}
 
-	ubd->wqs[UBLKDRV_COPY_WQ] =
-		alloc_workqueue("kmemcpy/%s", WQ_UNBOUND, 0, gd->disk_name);
-	if (!ubd->wqs[UBLKDRV_COPY_WQ]) {
-		pr_err("unable to allocate a workqueue for copying data, out of memory\n");
-		goto destroy_wqs;
+	if (!ubd->zero_copy) {
+		ubd->wqs[UBLKDRV_COPY_WQ] = alloc_workqueue(
+			"kmemcpy/%s", WQ_UNBOUND, 0, gd->disk_name);
+		if (!ubd->wqs[UBLKDRV_COPY_WQ]) {
+			pr_err("unable to allocate a workqueue for copying data, out of memory\n");
+			goto destroy_wqs;
+		}
 	}
 
 	ubd->wqs[UBLKDRV_CFQ_POP_WQ] =
@@ -564,7 +577,6 @@ destroy_wqs:
 	for (i = ARRAY_SIZE(ubd->wqs) - 1; !(i < 0); --i) {
 		if (ubd->wqs[i]) {
 			destroy_workqueue(ubd->wqs[i]);
-			ubd->wqs[i] = NULL;
 		}
 	}
 
@@ -591,12 +603,9 @@ free_ubd:
 
 void ublkdrv_dev_destroy(struct ublkdrv_dev *ubd)
 {
-	int i;
-
 	ublkdrv_uios_unregister(ubd);
 	del_gendisk(ubd->disk);
-	for (i = ARRAY_SIZE(ubd->wqs) - 1; !(i < 0); --i)
-		destroy_workqueue(ubd->wqs[i]);
+
 	put_disk(ubd->disk);
 	ublkdrv_dev_id_free(ubd->id);
 

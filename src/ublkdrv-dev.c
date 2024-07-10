@@ -349,8 +349,10 @@ static void ublkdrv_req_submit_work_h(struct work_struct *work)
 			ublkdrv_sectors_to_bytes(bio->bi_iter.bi_sector));
 		rc = ublkdrv_req_cells_acquire(
 			req, ublkdrv_sectors_to_bytes(bio_sectors(bio)));
-		nwh = ublkdrv_req_copy_work_h;
-		nwq = ubd->wqs[UBLKDRV_COPY_WQ];
+		if (!ubd->zero_copy) {
+			nwh = ublkdrv_req_copy_work_h;
+			nwq = ubd->wqs[UBLKDRV_COPY_WQ];
+		}
 		break;
 	case UBLKDRV_CMD_OP_READ:
 		ublkdrv_cmd_read_set_offset(
