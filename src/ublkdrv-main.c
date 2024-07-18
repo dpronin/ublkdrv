@@ -52,7 +52,7 @@ MODULE_AUTHOR("Pronin Denis <dannftk@yandex.ru>");
 MODULE_DESCRIPTION(
 	"UBLK driver for creating block devices that map on UBLK userspace application targets");
 MODULE_INFO(supported, "external");
-MODULE_VERSION("1.3.0");
+MODULE_VERSION("1.4.0");
 
 static int major;
 
