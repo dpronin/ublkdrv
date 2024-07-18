@@ -508,9 +508,7 @@ struct ublkdrv_dev *ublkdrv_dev_create(char const *disk_name,
 	set_disk_ro(gd, read_only);
 	set_capacity(gd, capacity_sectors);
 
-	blk_queue_max_hw_sectors(gd->queue, ubd->ctx->cells_sz >> SECTOR_SHIFT);
 	blk_queue_chunk_sectors(gd->queue, ubd->ctx->cells_sz >> SECTOR_SHIFT);
-	blk_queue_io_opt(gd->queue, ubd->ctx->cells_sz);
 	blk_set_queue_depth(gd->queue, ubd->ctx->cmdb->cmds_len - 1);
 	blk_queue_write_cache(gd->queue, true, false);
 
